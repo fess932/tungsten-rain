@@ -5,7 +5,7 @@ $name = "tungsten-rain_$version"
 $stage = Join-Path $env:TEMP $name
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory $stage | Out-Null
-Copy-Item info.json, data.lua, settings.lua, control.lua, changelog.txt $stage
+Copy-Item info.json, data.lua, settings.lua, control.lua, changelog.txt, thumbnail.png $stage
 Copy-Item -Recurse locale, graphics $stage
 $zip = "..\$name.zip"
 Remove-Item $zip -ErrorAction SilentlyContinue
