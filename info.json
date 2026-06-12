@@ -1,0 +1,9 @@
+{
+  "name": "tungsten-rain",
+  "version": "0.2.0",
+  "title": "Tungsten Rain — Orbital Kinetic Bombardment",
+  "author": "fess932",
+  "factorio_version": "2.0",
+  "dependencies": ["base >= 2.0", "space-age >= 2.0"],
+  "description": "A storage ring around the planet keeps 100 kg tungsten rods circulating at 0.01c (107 kt each). Firing is just a skipped turn at one deflector station. Fireball and shockwave like a nuke — no radiation, no warhead, no mercy. The projectile is not accelerated by the shot; the projectile lives accelerated."
+}

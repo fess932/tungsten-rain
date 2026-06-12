@@ -1,0 +1,60 @@
+---------------------------------------------------------------------------------------------------
+Version: 0.2.0
+Date: 2026-06-12
+  Features:
+    - Storage ring: per-planet, per-force magazine of pre-accelerated rods. Slugs are pulled from
+      orbiting platform hubs and spun up in the background (default 60 s each, capacity 10).
+      Firing only releases an already-charged rod (beam extraction: one station skips a turn).
+      No cooldown between shots by default — rate of fire is limited by rod spin-up time;
+      an optional minimum interval between shots remains as a setting (default 0).
+    - Buildable ring: the ring is a necklace of deflector stations (new item, 1 t = one rocket
+      each). Deliver stations to an orbiting hub; the ring assembles itself, one per second.
+      Top speed grows linearly with station count: damage scales as N^2, blast radius as N^(2/3),
+      spin-up time as N^2 (a half-built ring hits at 25% but charges 4x faster). Default 20
+      stations for full power (setting). A shot is a skipped turn at one station.
+    - Ring activation toggle: rings start inactive and pull nothing from hubs. Alt-select with
+      the targeter enables/pauses assembly above the current planet, so freighter platforms can
+      load up at one planet without feeding its ring. Pausing keeps the charge fireable.
+    - Remote interface: build_ring (testing) added; ring_status now reports stations, power and
+      enabled state.
+    - Fireball: fire damage component (default 150,000 at center, same falloff) plus fires ignited
+      in the inner blast zone. Like a nuclear blast, but without the radiation.
+    - New runtime settings: fire damage, ignite epicenter, rod spin-up time, ring capacity.
+    - Impacts chart the blast area (1.5x radius), so results are visible through fog of war.
+    - Status window (second shortcut-bar button): per-planet ring list with stations, power,
+      charged rods and spin-up countdown, plus pause/resume buttons per ring. Refreshes live.
+    - Visual shockwave: a continuous expanding blast front (glowing ring + two layers of a
+      procedurally generated dust torus, animated per tick) sweeps to the full blast radius
+      over ~1.2 s, with sparse secondary detonations, scattered scorchmarks and smouldering
+      smoke. The central fireball is a staggered cluster of nuke-class explosions. Pure
+      cosmetics, toggleable in settings.
+    - Incoming tracer: the rod is visible for ~0.17 s before impact as a white-hot streak
+      diving into the target at a random per-strike entry angle, with a light source on the
+      tip. After impact the trail lingers for ~0.7 s, fading from white-hot to pale blue as
+      the ionized wake recombines.
+    - Remote interface: ring_status and charge_ring (testing) added.
+  Changes:
+    - New "Relativistic" (tungsten-kinetic) damage type, used by default: resistances only apply
+      to listed damage types, and no mod lists this one — full damage always goes through.
+      Evolution never prepared a defense against objects arriving at a percent of lightspeed.
+    - Shockwave damage type is configurable: relativistic / explosion / impact / laser /
+      physical. Pick "explosion" (what vanilla nukes use) to play by vanilla balance rules;
+      Rampant "fixed" nests resist physical and fire at 99.99% but leak 8% of explosion.
+    - Targeter is now a shortcut-bar remote (like the artillery remote in 2.0): free, spawns
+      into the cursor, appears after researching the technology. Its recipe is removed.
+    - Rod recipe reworked: 8 tungsten plates + 3 carbon + 2 copper cables (80 kg core, 15 kg
+      ablative carbon sheath, 5 kg copper Faraday spiral). The spiral is gripped inductively by
+      the ring's deflectors; the sheath vaporizes on entry into a plasma cocoon around the nose.
+    - Cargo landing pads removed as a rod source: a rod on the ground cannot be released from an
+      orbital ring. Rods must be delivered to the hub of a platform orbiting the target planet.
+    - Lore pass: technology, item and setting descriptions rewritten around the storage ring;
+      English technology description brought to parity with Russian.
+---------------------------------------------------------------------------------------------------
+Version: 0.1.0
+Date: 2026-06-12
+  Features:
+    - Tungsten rod (100 kg @ 0.01c, ~107 kt kinetic): physical damage, 67-tile radius, linear falloff.
+    - Mass driver targeter (selection tool): click to designate, 3 s to impact.
+    - Ammo logistics: rods consumed from orbiting platform hubs or cargo landing pads.
+    - Runtime settings: damage, radius, cooldown, delay, rod requirement, friendly fire, trees.
+    - Remote interface "tungsten_rain" for testing and future auto-targeting integrations.
