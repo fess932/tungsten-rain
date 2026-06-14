@@ -455,8 +455,24 @@ local function damage_area(d)
         local dist = math.sqrt(dx * dx + dy * dy)
         if dist > d.r_inner and dist <= d.r_outer then
           local falloff = math.max(0.3, 1 - dist / d.radius)
-          pcall(e.damage, d.damage * falloff, d.force or "neutral",
-            d.damage_type or "tungsten-kinetic")
+          local dmg = d.damage * falloff
+          local dtype = d.damage_type or "tungsten-kinetic"
+          if dtype == "tungsten-kinetic" then
+            -- Relativistic: bypass ALL resistance. Some modpacks (e.g. Rampant
+            -- fixed) blanket-resist every registered damage type at
+            -- data-final-fixes, custom ones included, so a novel type is not
+            -- enough. At 0.01c armour is a rounding error, so we subtract straight
+            -- from health (no percentage/flat resist applies) and delete outright
+            -- when the hit would kill.
+            if dmg >= e.health then
+              pcall(function() e.die(d.force or "neutral") end)
+            else
+              pcall(function() e.health = e.health - dmg end)
+            end
+          else
+            -- any other configured type plays by vanilla resistance rules
+            pcall(e.damage, dmg, d.force or "neutral", dtype)
+          end
           if e.valid and d.fire_damage and d.fire_damage > 0 then
             pcall(e.damage, d.fire_damage * falloff, d.force or "neutral", "fire")
           end

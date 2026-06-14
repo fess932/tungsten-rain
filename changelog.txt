@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.2.3
+Date: 2026-06-14
+  Bugfixes:
+    - Relativistic damage now truly ignores resistance. A novel damage type was not enough:
+      Rampant fixed (and similar) blanket-resist every registered damage type at data-final-fixes,
+      custom ones included, so nests showed a 60% "Relativistic" resist. The relativistic strike
+      now subtracts straight from health (lethal hits delete the target), bypassing all percentage
+      and flat resistance. Other configured damage types still obey vanilla resistances.
+---------------------------------------------------------------------------------------------------
 Version: 0.2.2
 Date: 2026-06-14
   Features:
