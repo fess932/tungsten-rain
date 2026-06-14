@@ -40,7 +40,10 @@ local function init_storage()
   storage.trails = storage.trails or {} -- fading tracer afterglows post-impact
   storage.next_shot = storage.next_shot or {}
   -- rings[force_name][planet_name] =
-  --   { charged = N, charging_done = tick or nil, stations = N, enabled = bool }
+  --   { charged = N, loaded = N, charging_done = tick or nil, stations = N, enabled = bool }
+  --   loaded   = rods pulled from the hub, buffered, waiting their turn to spin up
+  --   charging_done = tick the one rod currently spinning up will be ready
+  --   charged  = rods fully spun up and fireable
   storage.rings = storage.rings or {}
   for _, by_planet in pairs(storage.rings) do
     for _, ring in pairs(by_planet) do
@@ -77,7 +80,7 @@ local function get_ring(force_name, planet_name)
     -- enabled = false: rings never pull from hubs until explicitly activated
     -- (alt-select with the targeter), so loading a freighter platform at one
     -- planet does not feed that planet's ring by accident.
-    ring = { charged = 0, stations = 0, enabled = false }
+    ring = { charged = 0, loaded = 0, stations = 0, enabled = false }
     by_force[planet_name] = ring
   end
   return ring
@@ -111,6 +114,12 @@ local function try_consume_from_hub(force, planet_name, item_name)
     end
   end
   return false
+end
+
+-- Rods the ring is holding: waiting in the buffer (loaded), being spun up
+-- right now (charging), and already charged and fireable. Capacity caps the sum.
+local function ring_total(ring)
+  return (ring.loaded or 0) + (ring.charged or 0) + (ring.charging_done and 1 or 0)
 end
 
 local function finish_charging(ring, tick)
@@ -160,9 +169,18 @@ script.on_nth_tick(60, function(event)
             end)
           end
 
-          -- rod spin-up: needs at least one station; weaker rings charge faster
-          if ring.stations > 0 and not ring.charging_done and ring.charged < c.capacity then
-            if try_consume_from_hub(force, planet_name, "tungsten-rod") then
+          if ring.stations > 0 then
+            -- rod intake: empty the hub straight into the ring buffer, up to
+            -- capacity, in one pass. A freighter can drop its whole load and
+            -- leave; the rods then spin up one at a time without it being parked.
+            while ring_total(ring) < c.capacity
+                and try_consume_from_hub(force, planet_name, "tungsten-rod") do
+              ring.loaded = (ring.loaded or 0) + 1
+            end
+
+            -- spin up one buffered rod at a time; weaker rings charge faster
+            if not ring.charging_done and (ring.loaded or 0) > 0 then
+              ring.loaded = ring.loaded - 1
               local ticks = math.max(60, math.floor(c.spinup * ring_power(ring, c)))
               ring.charging_done = event.tick + ticks
             end
@@ -233,7 +251,10 @@ function rebuild_status(player)
       caption = { "?", { "space-location-name." .. name }, { "planet-name." .. name }, name } }
     tbl.add{ type = "label", caption = ring.stations .. "/" .. c.stations_full }
     tbl.add{ type = "label", caption = math.floor(ring_power(ring, c) * 100 + 0.5) .. "%" }
-    tbl.add{ type = "label", caption = ring.charged .. "/" .. c.capacity }
+    local queued = (ring.loaded or 0) + (ring.charging_done and 1 or 0)
+    local rods = ring.charged .. "/" .. c.capacity
+    if queued > 0 then rods = rods .. " (+" .. queued .. ")" end
+    tbl.add{ type = "label", caption = rods }
     local spin = "—"
     if ring.charging_done then
       spin = { "tungsten-rain.gui-spinup-remaining",
@@ -834,9 +855,10 @@ remote.add_interface("tungsten_rain", {
     init_storage()
     local by_force = storage.rings[force_name]
     local ring = by_force and by_force[planet_name]
-    if not ring then return { charged = 0, stations = 0, power = 0, enabled = false } end
+    if not ring then return { charged = 0, loaded = 0, stations = 0, power = 0, enabled = false } end
     return {
       charged = ring.charged,
+      loaded = ring.loaded or 0,
       charging_done = ring.charging_done,
       stations = ring.stations or 0,
       power = ring_power(ring, cfg()),

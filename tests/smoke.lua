@@ -227,15 +227,16 @@ st = iface.ring_status("player", "vulcanus")
 check(hub["ring-deflector-station"] == 1, "station #1 deployed from hub")
 check(st.stations == 1, "ring reports 1 station")
 check(math.abs(st.power - 0.0025) < 1e-9, "power = (1/20)^2 = 0.0025")
-check(hub["tungsten-rod"] == 2, "weak ring still starts spinning up a rod")
+check(hub["tungsten-rod"] == 0, "all 3 rods pulled from the hub into the buffer at once")
 check(st.charged == 0 and st.charging_done == 60, "weak-ring spin-up clamped to 60-tick floor")
+check(st.loaded == 2, "2 rods wait in the buffer while 1 spins up")
 
 -- next second: rod #1 done (fast, weak ring), station #2 deployed, rod #2 starts
 nth({ tick = 60 })
 st = iface.ring_status("player", "vulcanus")
 check(st.charged == 1, "first rod charged after fast weak-ring spin-up")
 check(st.stations == 2 and hub["ring-deflector-station"] == 0, "station #2 deployed, hub out of stations")
-check(hub["tungsten-rod"] == 1, "rod #2 pulled")
+check(st.loaded == 1, "rod #2 pulled from buffer into spin-up, 1 still waiting")
 
 -- drain rods completely
 nth({ tick = 120 })

@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.2.2
+Date: 2026-06-14
+  Changes:
+    - Rod intake reworked: the ring now empties the hub straight into a buffer, up to capacity,
+      in one pass — a freighter can drop its whole load and leave, and the rods spin up one at a
+      time afterwards without it being parked. Previously a rod was only pulled when its spin-up
+      began, so every shot waited on a fresh pull. The status window shows buffered rods as
+      "charged/capacity (+queued)".
+---------------------------------------------------------------------------------------------------
 Version: 0.2.1
 Date: 2026-06-12
   Features:
