@@ -20,6 +20,9 @@ local function cfg()
     damage_type   = s["tungsten-rain-damage-type"].value,
     fire_damage   = s["tungsten-rain-fire-damage"].value,
     start_fires   = s["tungsten-rain-start-fires"].value,
+    dmg_pulses    = s["tungsten-rain-damage-pulses"].value,
+    dmg_interval  = math.max(1, math.floor(s["tungsten-rain-damage-interval"].value * 60)), -- s -> ticks
+
     radius        = s["tungsten-rain-radius"].value,
     cooldown      = s["tungsten-rain-cooldown"].value * 60, -- seconds -> ticks
     spinup        = s["tungsten-rain-spinup"].value * 60,   -- seconds -> ticks
@@ -36,6 +39,7 @@ end
 local function init_storage()
   storage.strikes = storage.strikes or {}
   storage.fx = storage.fx or {}     -- scheduled secondary detonations
+  storage.dmg = storage.dmg or {}   -- scheduled damage pulses (spread over time)
   storage.waves = storage.waves or {} -- live continuous blast waves (render objects)
   storage.trails = storage.trails or {} -- fading tracer afterglows post-impact
   storage.next_shot = storage.next_shot or {}
@@ -86,12 +90,31 @@ local function get_ring(force_name, planet_name)
   return ring
 end
 
--- Energy fraction of a full-power shot: (v/v_max)^2 = (stations/full)^2
-local function ring_power(ring, c)
+-- The ring does NOT accelerate the rod: the rod fires its own engine while
+-- circulating inside the ring, and the deflector stations only HOLD it on a stable
+-- orbit (containment) during and after the burn. The speed a ring can keep is
+-- capped by how many deflectors it has, so the held speed fraction = stations/full.
+local function ring_speed(ring, c)
   local n = math.min(ring.stations or 0, c.stations_full)
   if n <= 0 then return 0 end
-  local f = n / c.stations_full
+  return n / c.stations_full
+end
+
+-- Energy fraction of a full-power shot: (v/v_max)^2 = (stations/full)^2. A ring
+-- with too few deflectors can't contain a full-speed rod; it bleeds off the excess
+-- and settles the rod at the fastest orbit it can hold, hence less energy on impact.
+local function ring_power(ring, c)
+  local f = ring_speed(ring, c)
   return f * f
+end
+
+-- "Spin-up" is the rod accelerating itself, inside the ring, up to the speed the
+-- ring can hold, then stabilizing on orbit. F = ma with a fixed little engine makes
+-- the burn time linear in the final speed: a full ring takes the whole configured
+-- time to reach 0.01c, a half-built ring needs only 50% speed so it burns half as
+-- long. Floored at 60 ticks so even a near-empty ring takes a beat to settle.
+local function spinup_ticks(ring, c)
+  return math.max(60, math.floor(c.spinup * ring_speed(ring, c)))
 end
 
 -- Take one item out of the hub of any of this force's platforms parked at the planet.
@@ -181,8 +204,7 @@ script.on_nth_tick(60, function(event)
             -- spin up one buffered rod at a time; weaker rings charge faster
             if not ring.charging_done and (ring.loaded or 0) > 0 then
               ring.loaded = ring.loaded - 1
-              local ticks = math.max(60, math.floor(c.spinup * ring_power(ring, c)))
-              ring.charging_done = event.tick + ticks
+              ring.charging_done = event.tick + spinup_ticks(ring, c)
             end
           end
         end
@@ -409,6 +431,51 @@ local function update_tracer(s, tick)
   end)
 end
 
+-- One ring of the expanding blast: damages only the annulus (r_inner, r_outer]
+-- that the shockwave front has swept since the previous pulse, so damage rolls
+-- outward from the impact point in step with the visual front. Linear falloff
+-- from 100% at the center to 30% at the rim; each entity is caught exactly once,
+-- when the front reaches it — the core takes the penetrator hit first and hardest,
+-- the rim takes the spent wave last and weakest.
+local function damage_area(d)
+  local surface = d.surface
+  if not (surface and surface.valid) then return end
+  local ok_find, entities = pcall(function()
+    return surface.find_entities_filtered{ position = d.pos, radius = d.r_outer }
+  end)
+  if not (ok_find and entities) then return end
+  for _, e in pairs(entities) do
+    if e.valid and e.health and e.health > 0 then
+      local skip = false
+      if not d.friendly_fire and d.force and e.force == d.force then skip = true end
+      if d.spare_trees and e.type == "tree" then skip = true end
+      if not skip then
+        local dx = e.position.x - d.pos.x
+        local dy = e.position.y - d.pos.y
+        local dist = math.sqrt(dx * dx + dy * dy)
+        if dist > d.r_inner and dist <= d.r_outer then
+          local falloff = math.max(0.3, 1 - dist / d.radius)
+          pcall(e.damage, d.damage * falloff, d.force or "neutral",
+            d.damage_type or "tungsten-kinetic")
+          if e.valid and d.fire_damage and d.fire_damage > 0 then
+            pcall(e.damage, d.fire_damage * falloff, d.force or "neutral", "fire")
+          end
+        end
+      end
+    end
+  end
+  -- a couple of detonations on the advancing ring, so the wavefront is visible
+  if d.fx then
+    local band = math.max(0.1, d.r_outer - d.r_inner)
+    for _ = 1, 2 do
+      local a = math.random() * 2 * math.pi
+      local rr = d.r_inner + math.random() * band
+      spawn_first_valid(surface, WAVE_CANDIDATES,
+        { x = d.pos.x + math.cos(a) * rr, y = d.pos.y + math.sin(a) * rr })
+    end
+  end
+end
+
 local function do_strike(s)
   local surface = s.surface
   if not (surface and surface.valid) then
@@ -458,7 +525,11 @@ local function do_strike(s)
       surface = surface,
       radius = s.radius,
       start = game.tick,
-      duration = 72 -- 1.2 s rim-to-rim regardless of radius
+      -- rim-to-rim time = the damage bombardment window, so the visual front and
+      -- the damage ring expand together (min 48 ticks so a 1-pulse strike still
+      -- gets a visible sweep)
+      duration = math.max(48, math.max(1, math.floor(s.pulses or 1))
+                              * math.max(1, math.floor(s.interval or 30)))
     }
     pcall(function()
       wave.flash = rendering.draw_circle{
@@ -536,28 +607,35 @@ local function do_strike(s)
     end
   end
 
-  -- damage: physical (shockwave) + fire (fireball), linear falloff from 100% at center to 30% at the rim
-  local ok_find, entities = pcall(function()
-    return surface.find_entities_filtered{ position = pos, radius = s.radius }
-  end)
-  if not (ok_find and entities) then return end
-
-  for _, e in pairs(entities) do
-    if e.valid and e.health and e.health > 0 then
-      local skip = false
-      if not s.friendly_fire and s.force and e.force == s.force then skip = true end
-      if s.spare_trees and e.type == "tree" then skip = true end
-      if not skip then
-        local dx = e.position.x - pos.x
-        local dy = e.position.y - pos.y
-        local dist = math.sqrt(dx * dx + dy * dy)
-        local falloff = math.max(0.3, 1 - dist / s.radius)
-        pcall(e.damage, s.damage * falloff, s.force or "neutral", s.damage_type or "tungsten-kinetic")
-        if e.valid and s.fire_damage and s.fire_damage > 0 then
-          pcall(e.damage, s.fire_damage * falloff, s.force or "neutral", "fire")
-        end
-      end
-    end
+  -- damage: physical (shockwave) + fire (fireball) dealt as an expanding ring,
+  -- not one instant hit. The front rolls outward from the impact point over the
+  -- bombardment window (default 6 pulses x 0.5 s = 3 s), decelerating on the same
+  -- curve as the visual wave, R*(1-(1-p)^2), so damage and graphics stay locked
+  -- together. Pulse k damages the annulus the front swept since the last pulse:
+  -- the core eats the penetrator hit at t=0, the rim is reached last and weakest.
+  local pulses = math.max(1, math.floor(s.pulses or 1))
+  local interval = math.max(1, math.floor(s.interval or 30))
+  local prev_r = 0
+  for k = 1, pulses do
+    local p = k / pulses
+    local front_r = s.radius * (1 - (1 - p) * (1 - p))
+    table.insert(storage.dmg, {
+      tick = game.tick + (k - 1) * interval,
+      pos = pos,
+      surface = surface,
+      r_inner = prev_r,
+      r_outer = front_r,
+      radius = s.radius,
+      damage = s.damage,
+      fire_damage = s.fire_damage,
+      damage_type = s.damage_type,
+      force = s.force,
+      friendly_fire = s.friendly_fire,
+      spare_trees = s.spare_trees,
+      -- only later rings spawn extra pops; the impact frame is busy enough
+      fx = s.fx and k > 1
+    })
+    prev_r = front_r
   end
 
   if s.force then
@@ -715,7 +793,9 @@ local function on_selected(event)
     start_fires = c.start_fires,
     fx = c.fx,
     friendly_fire = c.friendly_fire,
-    spare_trees = c.spare_trees
+    spare_trees = c.spare_trees,
+    pulses = c.dmg_pulses,
+    interval = c.dmg_interval
   })
 
   pcall(function()
@@ -782,6 +862,15 @@ script.on_event(defines.events.on_tick, function(event)
     for i = #fx, 1, -1 do
       if event.tick >= fx[i].tick then
         do_fx(table.remove(fx, i))
+      end
+    end
+  end
+
+  local dmg = storage.dmg
+  if dmg and #dmg > 0 then
+    for i = #dmg, 1, -1 do
+      if event.tick >= dmg[i].tick then
+        damage_area(table.remove(dmg, i))
       end
     end
   end

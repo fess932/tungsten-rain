@@ -31,6 +31,27 @@ data:extend({
     order = "ab"
   },
   {
+    -- damage is dealt in this many pulses instead of one instant hit; the total
+    -- damage is unchanged (each pulse deals 1/N of it). 1 = old instant behavior.
+    type = "int-setting",
+    name = "tungsten-rain-damage-pulses",
+    setting_type = "runtime-global",
+    default_value = 6,
+    minimum_value = 1,
+    maximum_value = 60,
+    order = "ad"
+  },
+  {
+    -- seconds between damage pulses (6 pulses x 0.5 s = a 3 s bombardment)
+    type = "double-setting",
+    name = "tungsten-rain-damage-interval",
+    setting_type = "runtime-global",
+    default_value = 0.5,
+    minimum_value = 0.05,
+    maximum_value = 5,
+    order = "ae"
+  },
+  {
     type = "bool-setting",
     name = "tungsten-rain-fx",
     setting_type = "runtime-global",

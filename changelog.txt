@@ -1,7 +1,23 @@
 ---------------------------------------------------------------------------------------------------
 Version: 0.2.2
 Date: 2026-06-14
+  Features:
+    - Expanding-ring damage: the strike no longer deals its damage in a single instant frame.
+      It now rolls outward from the impact point as a shockwave, in steps (default 6, 0.5 s apart,
+      a 3 s sweep from center to rim), decelerating on the same curve as the visual blast front so
+      damage and graphics stay locked together. The core takes the hypervelocity penetrator hit at
+      impact; each target is then caught once, as the front passes it, with normal falloff (100%
+      center to 30% rim). Two new settings: damage steps (1 = one instant full-radius hit) and
+      time between steps. The visual wave duration now tracks this window.
   Changes:
+    - Lore + recipe: the ring no longer accelerates rods — the rod accelerates ITSELF. Rods now
+      cost 2 rocket fuel (the engine charge: the same propellant a platform thruster burns). The
+      rod fires its own engine up to speed while circulating inside the ring, and the deflector
+      stations only HOLD it on a stable orbit during the burn and after. Station count is now a
+      containment limit: the faster the rod, the more deflectors it takes to hold it, so stations
+      still cap speed and damage. "Spin-up" is now the rod's own burn time (F=ma with a fixed
+      little engine): linear in the held speed, so a full ring takes the whole configured time and
+      a half-built ring half as long. Item, technology and setting descriptions rewritten to match.
     - Rod intake reworked: the ring now empties the hub straight into a buffer, up to capacity,
       in one pass — a freighter can drop its whole load and leave, and the rods spin up one at a
       time afterwards without it being parked. Previously a rod was only pulled when its spin-up

@@ -91,7 +91,11 @@ local targeter = {
   }
 }
 
--- 100 kg total: 80 kg tungsten core, 15 kg ablative carbon sheath, 5 kg copper Faraday spiral
+-- 100 kg rod: 80 kg tungsten core, 15 kg ablative carbon sheath, 5 kg copper
+-- Faraday spiral. The rocket fuel is the injector charge: the rod accelerates
+-- ITSELF to 0.01c on its own propellant (the same fuel that gives a platform
+-- thruster its thrust). The ring does not accelerate the rod — its deflectors
+-- only catch the rocket-driven rod and hold it in a stable orbit until fired.
 local rod_recipe = {
   type = "recipe",
   name = "tungsten-rod",
@@ -100,7 +104,8 @@ local rod_recipe = {
   ingredients = {
     { type = "item", name = "tungsten-plate", amount = 8 },
     { type = "item", name = "carbon",         amount = 3 },
-    { type = "item", name = "copper-cable",   amount = 2 }
+    { type = "item", name = "copper-cable",   amount = 2 },
+    { type = "item", name = "rocket-fuel",    amount = 2 }
   },
   results = { { type = "item", name = "tungsten-rod", amount = 1 } }
 }

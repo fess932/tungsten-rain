@@ -37,7 +37,7 @@ do
   dofile("settings.lua")
   data = saved
 end
-check(#settings_protos == 14, "14 settings defined (got " .. #settings_protos .. ")")
+check(#settings_protos == 16, "16 settings defined (got " .. #settings_protos .. ")")
 for _, p in ipairs(settings_protos) do
   check(p.setting_type == "runtime-global", p.name .. " is runtime-global")
   check(p.default_value ~= nil, p.name .. " has default")
@@ -107,7 +107,7 @@ check(tech and #tech.effects == 2, "technology unlocks 2 recipes (targeter is a 
 local known = {
   ["tungsten-plate"] = true, ["carbon"] = true, ["copper-cable"] = true,
   ["low-density-structure"] = true, ["accumulator"] = true, ["processing-unit"] = true,
-  ["advanced-circuit"] = true, ["radar"] = true
+  ["advanced-circuit"] = true, ["radar"] = true, ["rocket-fuel"] = true
 }
 for _, p in ipairs(extended) do
   if p.type == "recipe" then
@@ -200,7 +200,8 @@ check(s.damage_type == "tungsten-kinetic", "shockwave damage type defaults to re
 check(s.fx == true, "strike carries the visual shockwave flag")
 
 -- ring assembly + charge cycle. Settings: 20 stations full, spinup 60 s = 3600 ticks.
--- With 1 station: power = (1/20)^2 = 0.0025 -> spin-up clamped to the 60-tick floor.
+-- Spin-up is linear in held speed: ticks = max(60, floor(3600 * stations/20)).
+-- 1 station -> 180 ticks, 2 -> 360, 20 (full) -> 3600.
 print("ring:")
 local nth = handlers.nth[60]
 
@@ -228,25 +229,26 @@ check(hub["ring-deflector-station"] == 1, "station #1 deployed from hub")
 check(st.stations == 1, "ring reports 1 station")
 check(math.abs(st.power - 0.0025) < 1e-9, "power = (1/20)^2 = 0.0025")
 check(hub["tungsten-rod"] == 0, "all 3 rods pulled from the hub into the buffer at once")
-check(st.charged == 0 and st.charging_done == 60, "weak-ring spin-up clamped to 60-tick floor")
+check(st.charged == 0 and st.charging_done == 180, "1-station spin-up = floor(3600/20) = 180 ticks")
 check(st.loaded == 2, "2 rods wait in the buffer while 1 spins up")
 
--- next second: rod #1 done (fast, weak ring), station #2 deployed, rod #2 starts
-nth({ tick = 60 })
+-- rod #1 done, station #2 deployed, rod #2 starts spinning up (2 stations = 360 ticks)
+nth({ tick = 180 })
 st = iface.ring_status("player", "vulcanus")
-check(st.charged == 1, "first rod charged after fast weak-ring spin-up")
+check(st.charged == 1, "first rod charged after its spin-up")
 check(st.stations == 2 and hub["ring-deflector-station"] == 0, "station #2 deployed, hub out of stations")
 check(st.loaded == 1, "rod #2 pulled from buffer into spin-up, 1 still waiting")
+check(st.charging_done == 540, "2-station spin-up = 180 + 360")
 
--- drain rods completely
-nth({ tick = 120 })
-nth({ tick = 180 })
+-- drain rods completely (rod #2 done at 540, rod #3 at 540 + 360 = 900)
+nth({ tick = 540 })
+nth({ tick = 900 })
 st = iface.ring_status("player", "vulcanus")
 check(st.charged == 3 and hub["tungsten-rod"] == 0 and st.charging_done == nil,
   "all 3 rods charged, hub empty, ring idle")
 
 -- empty hub: nth tick is a no-op
-nth({ tick = 240 })
+nth({ tick = 960 })
 st = iface.ring_status("player", "vulcanus")
 check(st.charged == 3 and st.stations == 2, "no phantom rods or stations from an empty hub")
 
@@ -255,14 +257,14 @@ alt_toggle()
 st = iface.ring_status("player", "vulcanus")
 check(st.enabled == false, "alt-select again pauses the ring")
 hub["ring-deflector-station"] = 1
-nth({ tick = 300 })
+nth({ tick = 1020 })
 st = iface.ring_status("player", "vulcanus")
 check(st.stations == 2 and hub["ring-deflector-station"] == 1 and st.charged == 3,
   "paused ring pulls nothing, keeps its charge")
 
 -- resume: assembly continues
 alt_toggle()
-nth({ tick = 360 })
+nth({ tick = 1080 })
 st = iface.ring_status("player", "vulcanus")
 check(st.stations == 3 and hub["ring-deflector-station"] == 0, "resumed ring continues assembly")
 
@@ -272,9 +274,9 @@ st = iface.ring_status("player", "vulcanus")
 check(st.stations == 20 and st.power == 1 and st.enabled == true,
   "build_ring completes and activates the ring (power 100%)")
 hub["tungsten-rod"] = 1
-nth({ tick = 420 })
+nth({ tick = 1140 })
 st = iface.ring_status("player", "vulcanus")
-check(st.charging_done == 420 + 3600, "full ring spin-up takes the full 3600 ticks")
+check(st.charging_done == 1140 + 3600, "full ring spin-up takes the full 3600 ticks")
 
 -- cheat charge for testing
 iface.charge_ring("player", "vulcanus", 5)
