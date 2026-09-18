@@ -14,10 +14,18 @@ Tungsten rods are crafted from tungsten plates, carbon, copper cable, and rocket
 
 Both controls live in the shortcut bar and appear only after you research Kinetic Bombardment (needs Tungsten steel + Rocket silo):
 
-- the red button with the artillery-remote icon is the Mass Driver Targeter — select to fire, alt-select to enable or pause ring assembly above the planet you're on;
+- the red button with the artillery-remote icon is the Mass Driver Targeter — select to fire a rod, alt-select to enable or pause ring assembly above the planet you're on, right-drag to set the protected zone for this planet, alt + right-drag to clear it;
 - the button with the radar icon opens the Storage rings status window.
 
 Rings start inactive: alt-select with the targeter first, or the ring won't pull anything from your hubs.
+
+**Needles: the ring guards your base on its own**
+
+Rods are for nests. For the biters already running at your walls the ring has a second trade: it skims the asteroid dust it sweeps up and forges needle cartridges — 10 kg bundles of a hundred steel needles, held at a lazy 15 km/s. No item, no recipe, no delivery: every station of an active ring adds 0.2 per second (a full ring, 4 per second), up to 1000 in stock.
+
+Right-drag with the targeter to mark the protected zone — one per planet, a new one replaces the old. From then on every enemy that walks into it gets a needle: biters, spitters, nests, worms, pentapods. One cartridge sprays up to 100 of them within 32 tiles, one needle each, every needle a kill. No blast, no crater, nothing of yours is touched. Needles can't be aimed by hand — they only guard the zone. They also ignore demolishers: to a demolisher a needle is a pellet to an elephant — those take a tungsten rod. The rods stay your manual heavy artillery.
+
+Why they don't burn up: a cartridge falls whole under the same plasma cocoon that protects a rod. At about a kilometre up, the current in its copper spiral runs out, the binding lets go, and the cocoon itself blows the bundle open. Open it in orbit instead and the needles would burn up like meteors on the way down.
 
 **Damage**
 
@@ -36,16 +44,16 @@ It rolls out as an expanding shockwave: the core takes the penetrator hit at the
 - Half-built rings already work: held speed scales with station count, damage as N squared, blast radius as the cube root — a weak ring hits softer but charges faster.
 - Holding charged rods is nearly free — but every bend shoves the station outward, hundreds of times harder than gravity pulls it in. So the stations hang on a closed tether hoop spun in orbit from asteroid carbon, and the recoil of the circulating tungsten becomes hoop tension. That's what caps how many rods a ring can hold.
 - No cooldown between shots by default: rate of fire is limited only by how many rods are charged and how fast the ring spins up new ones.
-- Per-planet, per-force rings, with a live status window: stations, power, charged rods and spin-up countdown, plus pause/resume.
+- Per-planet, per-force rings, with a live status window: stations, power, charged rods, spin-up countdown and needle stock, plus pause/resume.
 - A visible incoming tracer, an expanding shockwave, scorchmarks and smouldering smoke — all toggleable cosmetics.
 
 **Settings**
 
-Adjustable at runtime: center damage, fire damage, blast radius, damage pulses and their timing, rod spin-up time, ring capacity, stations for a full ring, friendly fire, destroying trees, and the auto-fire mode (interval, radar range, whether to also hit worms).
+Adjustable at runtime: center damage, fire damage, blast radius, damage pulses and their timing, rod spin-up time, ring capacity, stations for a full ring, friendly fire, destroying trees, the auto-fire mode (interval, radar range, whether to also hit worms), and needles (stock, forge rate per station, spread radius, targets per cartridge).
 
 **Factorio versions**
 
-0.3.x is for Factorio 2.1, 0.2.10 for Factorio 2.0. The game downloads the right one for your version.
+0.3.x and later are for Factorio 2.1, 0.2.10 is for Factorio 2.0. The game downloads the right one for your version.
 
 This mod started as a petty revenge fantasy against a Rampant nest that burned down my factory. Nauvis isn't Earth — but the biters don't get to know that.
 
@@ -53,7 +61,6 @@ This mod started as a petty revenge fantasy against a Rampant nest that burned d
 
 Ideas in the works — partly thanks to the orbital-mechanics homework people have been doing in the comments:
 
-- Defensive fire: rings that also bomb the swarm running at your radars and outposts, not just the nests — so you can actually hold reclaimed ground.
 - Carpet and patrol that also catch worms and loose biter clusters, not only spawners.
 - Tiers of bombardment: a crude, inaccurate "rods from god" gravity drop early, with the full storage ring as the endgame upgrade.
 - Infinite accuracy research: early shots scatter by ~100 tiles, late shots land surgical.

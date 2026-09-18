@@ -92,6 +92,40 @@ data:extend({
     order = "cc"
   },
   {
+    -- needle cartridges: forged by the stations themselves, no item or recipe
+    type = "int-setting",
+    name = "tungsten-rain-needle-capacity",
+    setting_type = "runtime-global",
+    default_value = 1000,
+    minimum_value = 1,
+    order = "cd"
+  },
+  {
+    type = "double-setting",
+    name = "tungsten-rain-needle-rate",
+    setting_type = "runtime-global",
+    default_value = 0.2,
+    minimum_value = 0.01,
+    order = "ce"
+  },
+  {
+    type = "int-setting",
+    name = "tungsten-rain-needle-radius",
+    setting_type = "runtime-global",
+    default_value = 32,
+    minimum_value = 1,
+    maximum_value = 200,
+    order = "cf"
+  },
+  {
+    type = "int-setting",
+    name = "tungsten-rain-needle-targets",
+    setting_type = "runtime-global",
+    default_value = 100,
+    minimum_value = 1,
+    order = "cg"
+  },
+  {
     type = "int-setting",
     name = "tungsten-rain-delay",
     setting_type = "runtime-global",

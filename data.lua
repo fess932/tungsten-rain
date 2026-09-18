@@ -88,6 +88,17 @@ local targeter = {
     border_color = { r = 1, g = 0.5, b = 0 },
     cursor_box_type = "not-allowed",
     mode = { "nothing" }
+  },
+  -- reverse-select: mark a protected zone; alt-reverse-select: clear zones
+  reverse_select = {
+    border_color = { r = 0.2, g = 0.8, b = 1 },
+    cursor_box_type = "not-allowed",
+    mode = { "nothing" }
+  },
+  alt_reverse_select = {
+    border_color = { r = 0.5, g = 0.5, b = 0.5 },
+    cursor_box_type = "not-allowed",
+    mode = { "nothing" }
   }
 }
 

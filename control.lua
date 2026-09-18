@@ -20,6 +20,36 @@ local SMOKE_CANDIDATES = { "nuclear-smouldering-smoke-source" }
 -- mods' on-damage hooks. The relativistic chunk is what guarantees the kill.
 local LOGICAL_DAMAGE_TYPES = { "impact", "physical", "explosion" }
 
+-- Kill `e` outright, and with it the whole stack it may stand for. Squad
+-- compression (Rampant) shows a squad as one biter and, when that one dies,
+-- pops the next out on the same spot; so keep killing there until the stack
+-- is spent. Plain entities cost one extra half-tile search. `on_next` (optional)
+-- is called with each further biter of the stack just before it dies.
+local STACK_LIMIT = 500
+
+-- Hostile combat robots are Rampant's drones — and its eggs, which hatch
+-- biters when they die. A kinetic hit vaporizes them instead: destroy() raises
+-- no death, so there is nothing left to hatch.
+local function vaporize(e)
+  pcall(function() e.destroy() end)
+end
+
+local function kill_stack(surface, e, force, on_next)
+  local name, pos, owner = e.name, e.position, e.force
+  pcall(function() e.die(force) end)
+  for _ = 1, STACK_LIMIT do
+    local ok, found = pcall(function()
+      return surface.find_entities_filtered{ position = pos, radius = 0.5, name = name,
+                                             force = owner, limit = 1 }
+    end)
+    local nxt = ok and found and found[1]
+    if not (nxt and nxt.valid) then break end
+    if on_next then pcall(on_next, nxt) end
+    pcall(function() nxt.die(force) end)
+    if nxt.valid then break end -- could not be killed (immune): leave it
+  end
+end
+
 local function cfg()
   local s = settings.global
   return {
@@ -42,7 +72,11 @@ local function cfg()
     auto_fire     = s["tungsten-rain-auto-fire"].value,
     auto_interval = math.max(600, math.floor(s["tungsten-rain-auto-interval"].value * 60)), -- s -> ticks, min 10 s
     auto_range    = s["tungsten-rain-auto-range"].value,
-    auto_worms    = s["tungsten-rain-auto-worms"].value
+    auto_worms    = s["tungsten-rain-auto-worms"].value,
+    needle_capacity = s["tungsten-rain-needle-capacity"].value,
+    needle_rate     = s["tungsten-rain-needle-rate"].value,      -- per station per second
+    needle_radius   = s["tungsten-rain-needle-radius"].value,
+    needle_targets  = s["tungsten-rain-needle-targets"].value     -- targets per cartridge
   }
 end
 
@@ -77,9 +111,25 @@ local function init_storage()
   --   loaded   = rods pulled from the hub, buffered, waiting their turn to spin up
   --   charging_done = tick the one rod currently spinning up will be ready
   --   charged  = rods fully spun up and fireable
+  --   needles  = needle cartridges ready to fire (forged by the stations
+  --              themselves out of asteroid dust; see "Needle cartridges" below)
+  --   needle_frac = fractional cartridge carried between seconds
   storage.rings = storage.rings or {}
+  -- zones[force_name][surface_index] = { [id] = { id, area, render } }: the ground
+  -- the ring guards with needle cartridges — at most one zone per planet, a new
+  -- one replaces the old. zone_pieces is the flat scan list built from it,
+  -- zone_cursor the round-robin position in that list
+  storage.zones = storage.zones or {}
+  storage.zone_next_id = storage.zone_next_id or 1
+  storage.zone_cursor = storage.zone_cursor or 1
+  -- needle_volleys: cartridges in flight; needle_claims[unit_number] = tick until
+  -- which that enemy already has a needle coming and is not targeted again
+  storage.needle_volleys = storage.needle_volleys or {}
+  storage.needle_claims = storage.needle_claims or {}
   for _, by_planet in pairs(storage.rings) do
     for _, ring in pairs(by_planet) do
+      ring.needles = ring.needles or 0
+      ring.needle_frac = ring.needle_frac or 0
       ring.stations = ring.stations or 0
       -- migration: rings that were already being built stay active
       if ring.enabled == nil then ring.enabled = ring.stations > 0 end
@@ -246,6 +296,19 @@ script.on_nth_tick(60, function(event)
         ring.loaded = ring.loaded - 1
         ring.charging_done = event.tick + spinup_ticks(ring, c)
       end
+      -- needle cartridges: every active station forges needle_rate per second
+      -- from the asteroid dust the ring sweeps up; no hub, no platform needed
+      if ring.enabled and (ring.stations or 0) > 0 then
+        local room = c.needle_capacity - (ring.needles or 0)
+        if room > 0 then
+          local made = ring.stations * c.needle_rate + (ring.needle_frac or 0)
+          local whole = math.floor(made)
+          ring.needle_frac = made - whole
+          ring.needles = (ring.needles or 0) + math.min(whole, room)
+        else
+          ring.needle_frac = 0
+        end
+      end
     end
   end
 
@@ -304,9 +367,9 @@ function rebuild_status(player)
     return
   end
 
-  local tbl = content.add{ type = "table", column_count = 6 }
+  local tbl = content.add{ type = "table", column_count = 7 }
   for _, key in ipairs({ "gui-col-planet", "gui-col-stations", "gui-col-power",
-                         "gui-col-rods", "gui-col-spinup" }) do
+                         "gui-col-rods", "gui-col-spinup", "gui-col-needles" }) do
     local l = tbl.add{ type = "label", caption = { "tungsten-rain." .. key } }
     l.style.font = "default-bold"
   end
@@ -329,6 +392,7 @@ function rebuild_status(player)
                math.max(0, math.ceil((ring.charging_done - game.tick) / 60)) }
     end
     tbl.add{ type = "label", caption = spin }
+    tbl.add{ type = "label", caption = (ring.needles or 0) .. "/" .. c.needle_capacity }
     tbl.add{ type = "button", name = "tungsten-rain-toggle/" .. name,
       caption = ring.enabled and { "tungsten-rain.gui-btn-pause" }
                              or { "tungsten-rain.gui-btn-resume" } }
@@ -513,7 +577,13 @@ local function damage_area(d)
           -- data-final-fixes. At 0.01c armour is a rounding error. A lethal hit
           -- deletes the target outright; a survivor loses the rest from health.
           if dmg >= e.health then
-            pcall(function() e.die(d.force or "neutral") end)
+            if e.type == "combat-robot" then
+              vaporize(e)
+            elseif e.type == "unit" then
+              kill_stack(surface, e, d.force or "neutral")
+            else
+              pcall(function() e.die(d.force or "neutral") end)
+            end
           else
             pcall(function() e.health = e.health - dmg end)
             -- the same impact also strikes with every logical conventional type
@@ -1347,7 +1417,316 @@ local function on_alt_selected(event)
   player.print({ key, planet.name, ring.stations, c.stations_full, ring.charged })
 end
 
+-- ---------------------------------------------------------------------------
+-- Needle cartridges and protected zones
+-- A needle cartridge is a 10 kg bundle of 100 steel needles held at 15 km/s —
+-- slow enough that a ring holds it on a far weaker pulse than a rod, and every
+-- station forges its own out of the asteroid dust the ring sweeps up. It enters
+-- the atmosphere whole under its plasma cocoon; the spiral's induced current
+-- decays on a timer set by the firing pulse, and at ~1 km the binding lets go
+-- and the cocoon itself blows the bundle open into a spray — one needle per
+-- target, no blast, no crater. Zones are marked with the targeter's
+-- reverse-select; every enemy that walks into one gets a needle.
+-- ---------------------------------------------------------------------------
+-- combat-robot: Rampant drones and eggs (vaporized, so eggs never hatch)
+local NEEDLE_TYPES = { "unit", "unit-spawner", "turret", "spider-unit", "combat-robot" }
+local NEEDLE_DELAY = 90   -- ticks from release to impact
+local ZONE_SCAN_PERIOD = 60 -- every zone piece is searched once per second
+local ZONE_PIECE = 128    -- tiles per side of one search piece
+-- needle visuals, in ticks before impact: the cartridge streaks down from the
+-- sky, opens over the group, then each needle flies to its own target
+local NEEDLE_SKY_TICKS = 36
+local NEEDLE_SPLIT_TICKS = 16
+local NEEDLE_BURST_HEIGHT = 16 -- tiles screen-up of the group's middle
+-- the sky streak's trail fades this many ticks after impact: top piece first,
+-- the piece nearest the burst last (the needle fan itself is gone at impact)
+local NEEDLE_TRAIL_MIN = 4
+local NEEDLE_TRAIL_MAX = 14
+-- each needle line lingers up to this many extra ticks, at random, so the fan
+-- goes out ragged instead of all at once (still mostly before the trail)
+local NEEDLE_FAN_JITTER = 6
+-- and appears up to this many ticks late (must stay below half the split time)
+local NEEDLE_APPEAR_JITTER = 6
+local NEEDLE_COLOR = { r = 1, g = 0.78, b = 0.45, a = 0.95 }
+
+local function enemy_forces(force)
+  local out = {}
+  for _, f in pairs(game.forces) do
+    if f ~= force and force.is_enemy(f) then out[#out + 1] = f end
+  end
+  return out
+end
+
+-- Flat list of search pieces across every zone, so the per-tick scanner can
+-- walk them round-robin: each zone is cut into ZONE_PIECE-sized squares.
+local function rebuild_zone_pieces()
+  local pieces = {}
+  for force_name, by_surface in pairs(storage.zones) do
+    for surface_index, zones in pairs(by_surface) do
+      for id, z in pairs(zones) do
+        local a = z.area
+        for y = a.left_top.y, a.right_bottom.y - 1e-6, ZONE_PIECE do
+          for x = a.left_top.x, a.right_bottom.x - 1e-6, ZONE_PIECE do
+            pieces[#pieces + 1] = {
+              force_name = force_name, surface_index = surface_index, zone_id = id,
+              area = { { x, y }, { math.min(x + ZONE_PIECE, a.right_bottom.x),
+                                   math.min(y + ZONE_PIECE, a.right_bottom.y) } }
+            }
+          end
+        end
+      end
+    end
+  end
+  storage.zone_pieces = pieces
+  storage.zone_cursor = 1
+end
+
+local function draw_zone(surface, force, area)
+  local ok, obj = pcall(function()
+    return rendering.draw_rectangle{
+      color = { r = 0.2, g = 0.6, b = 1, a = 0.5 },
+      width = 3,
+      filled = false,
+      left_top = area.left_top,
+      right_bottom = area.right_bottom,
+      surface = surface,
+      forces = { force },
+      draw_on_ground = true
+    }
+  end)
+  return ok and obj or nil
+end
+
+-- drop this force's zone on this surface, if any; returns whether there was one
+local function clear_zone(force, surface)
+  local by_surface = storage.zones[force.name]
+  local zones = by_surface and by_surface[surface.index]
+  if not zones then return false end
+  local had = false
+  for _, z in pairs(zones) do
+    pcall(function() if z.render and z.render.valid then z.render.destroy() end end)
+    had = true
+  end
+  by_surface[surface.index] = nil
+  rebuild_zone_pieces()
+  return had
+end
+
+-- one zone per planet: marking a new one replaces the old
+local function add_zone(force, surface, area)
+  clear_zone(force, surface)
+  local by_surface = storage.zones[force.name]
+  if not by_surface then by_surface = {}; storage.zones[force.name] = by_surface end
+  local zones = {}
+  by_surface[surface.index] = zones
+  local id = storage.zone_next_id
+  storage.zone_next_id = id + 1
+  local a = {
+    left_top = { x = math.floor(area.left_top.x), y = math.floor(area.left_top.y) },
+    right_bottom = { x = math.ceil(area.right_bottom.x), y = math.ceil(area.right_bottom.y) }
+  }
+  zones[id] = { id = id, area = a, render = draw_zone(surface, force, a) }
+  rebuild_zone_pieces()
+end
+
+-- Split fresh targets into cartridges: each takes up to needle_targets enemies
+-- within needle_radius of its first one. Returns lists of entities.
+local function group_for_cartridges(targets, radius, per_cartridge)
+  local r2 = radius * radius
+  local taken, groups = {}, {}
+  for i, seed in ipairs(targets) do
+    if not taken[i] then
+      local sp = seed.position
+      local group = {}
+      for j = i, #targets do
+        if not taken[j] then
+          local p = targets[j].position
+          local dx, dy = p.x - sp.x, p.y - sp.y
+          if dx * dx + dy * dy <= r2 then
+            taken[j] = true
+            group[#group + 1] = targets[j]
+            if #group >= per_cartridge then break end
+          end
+        end
+      end
+      groups[#groups + 1] = group
+    end
+  end
+  return groups
+end
+
+-- One piece of one zone: find unclaimed enemies, spend cartridges on them.
+local function scan_zone_piece(piece, c, tick)
+  local force = game.forces[piece.force_name]
+  local surface = game.get_surface(piece.surface_index)
+  if not (force and force.valid and surface and surface.valid and surface.planet) then return end
+  local free = not c.require_rods
+  local ring
+  if not free then
+    local by_force = storage.rings[force.name]
+    ring = by_force and by_force[surface.planet.name]
+    if not (ring and ring.enabled and (ring.needles or 0) > 0) then return end
+  end
+  local enemies = enemy_forces(force)
+  if #enemies == 0 then return end
+  local ok, ents = pcall(function()
+    return surface.find_entities_filtered{ area = piece.area, type = NEEDLE_TYPES, force = enemies }
+  end)
+  if not (ok and ents and #ents > 0) then return end
+
+  local claims = storage.needle_claims
+  local fresh = {}
+  for _, e in pairs(ents) do
+    if e.valid then
+      local id = e.unit_number
+      if not (id and claims[id] and claims[id] > tick) then fresh[#fresh + 1] = e end
+    end
+  end
+  if #fresh == 0 then return end
+
+  for _, group in ipairs(group_for_cartridges(fresh, c.needle_radius, c.needle_targets)) do
+    if not free then
+      if ring.needles < 1 then break end
+      ring.needles = ring.needles - 1
+    end
+    local cx, cy = 0, 0
+    for _, e in ipairs(group) do
+      if e.unit_number then claims[e.unit_number] = tick + NEEDLE_DELAY + 30 end
+      local p = e.position
+      cx, cy = cx + p.x, cy + p.y
+    end
+    table.insert(storage.needle_volleys, {
+      tick = tick + NEEDLE_DELAY, surface = surface, force = force, targets = group, fx = c.fx,
+      -- the cartridge opens a little "above" (screen-up of) the middle of its group
+      burst = { x = cx / #group, y = cy / #group - NEEDLE_BURST_HEIGHT },
+      slant = (math.random() - 0.5) * 2
+    })
+  end
+end
+
+-- Called every tick: search the next slice of zone pieces so that every piece
+-- is covered once per ZONE_SCAN_PERIOD, spread evenly instead of in a burst.
+local function zone_defense_step(tick)
+  local pieces = storage.zone_pieces
+  if not pieces or #pieces == 0 then return end
+  local c
+  -- fractional pacing: #pieces per period, so 2 pieces = one search every 30 ticks
+  local budget = (storage.zone_budget or 0) + #pieces / ZONE_SCAN_PERIOD
+  local per_tick = math.floor(budget)
+  storage.zone_budget = budget - per_tick
+  for _ = 1, per_tick do
+    local i = storage.zone_cursor
+    if i > #pieces then i = 1 end
+    storage.zone_cursor = i + 1
+    c = c or cfg()
+    scan_zone_piece(pieces[i], c, tick)
+  end
+end
+
+-- A cartridge arrives: one needle per target, each tracked to where it is now.
+local function land_volley(v)
+  local surface, force = v.surface, v.force
+  if not (surface and surface.valid) then return end
+  for _, e in ipairs(v.targets) do
+    -- normally the fan already killed it the moment its needle landed
+    -- (needle_fx); this catches targets when the visuals are off
+    if e.valid then needle_hit(v, e) end
+  end
+end
+
+local function lerp(a, b, t) return { x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t } end
+
+-- A needle strikes e: it dies, and with it its compressed stack — every biter
+-- of the stack still gets its own streak from the burst
+local function needle_hit(v, e)
+  local surface = v.surface
+  if e.type == "combat-robot" then return vaporize(e) end
+  kill_stack(surface, e, v.force, v.fx and v.burst and function(n)
+    rendering.draw_line{ color = NEEDLE_COLOR, width = 1.5, from = v.burst, to = n.position,
+      surface = surface, time_to_live = NEEDLE_SPLIT_TICKS / 2 + math.random(0, NEEDLE_FAN_JITTER) }
+  end or nil)
+end
+
+-- Per-tick visuals of a cartridge in flight: one hot streak falling from the sky
+-- to the burst point, a flash, then a fan of needles — one line to every target,
+-- drawn in two halves so the spray visibly spreads out. Needle tips track the
+-- targets, so a running biter is still hit where it is.
+local function needle_fx(v, tick)
+  local surface = v.surface
+  if not (surface and surface.valid) then return end
+  local left = v.tick - tick
+  local burst = v.burst
+  if left <= NEEDLE_SKY_TICKS and left > NEEDLE_SPLIT_TICKS then
+    local sky = { x = burst.x + v.slant * 30, y = burst.y - 60 }
+    local t0 = (NEEDLE_SKY_TICKS - left) / (NEEDLE_SKY_TICKS - NEEDLE_SPLIT_TICKS)
+    local t1 = math.min(1, t0 + 0.25)
+    pcall(function()
+      -- each piece lingers past the impact, so the streak's trail outlives the
+      -- needle fan by a moment and fades from the top down
+      local expires = NEEDLE_TRAIL_MIN + math.floor(t0 * (NEEDLE_TRAIL_MAX - NEEDLE_TRAIL_MIN))
+      rendering.draw_line{ color = NEEDLE_COLOR, width = 5, from = lerp(sky, burst, t0),
+        to = lerp(sky, burst, t1), surface = surface, time_to_live = left + expires }
+    end)
+  elseif left <= NEEDLE_SPLIT_TICKS and left > 0 then
+    if left == NEEDLE_SPLIT_TICKS then
+      pcall(function()
+        rendering.draw_light{ sprite = "utility/light_small", scale = 3, intensity = 1,
+          color = NEEDLE_COLOR, target = burst, surface = surface, time_to_live = 8 }
+      end)
+      -- every needle leaves the burst a little late, at random, so the fan
+      -- opens ragged; each still reaches its target by the impact tick
+      v.jitter = {}
+      for i = 1, #v.targets do v.jitter[i] = math.random(0, NEEDLE_APPEAR_JITTER) end
+    end
+    local half = NEEDLE_SPLIT_TICKS / 2
+    for i, e in ipairs(v.targets) do
+      local j = v.jitter and v.jitter[i] or 0
+      if e.valid and left == NEEDLE_SPLIT_TICKS - j then
+        pcall(function()
+          rendering.draw_line{ color = NEEDLE_COLOR, width = 1.5, from = burst,
+            to = lerp(burst, e.position, 0.5), surface = surface,
+            time_to_live = half + math.random(0, NEEDLE_FAN_JITTER) }
+        end)
+      elseif e.valid and left == half - j then
+        -- the needle reaches its biter now: draw it to where the biter stands
+        -- (a line tied to the entity would vanish with it) and kill it on the spot
+        pcall(function()
+          rendering.draw_line{ color = NEEDLE_COLOR, width = 1.5,
+            from = lerp(burst, e.position, 0.5), to = e.position, surface = surface,
+            time_to_live = half + math.random(0, NEEDLE_FAN_JITTER) }
+        end)
+        needle_hit(v, e)
+      end
+    end
+  end
+end
+
+local function on_reverse_selected(event)
+  if event.item ~= "tungsten-rain-targeter" then return end
+  local player = game.get_player(event.player_index)
+  if not player then return end
+  local surface = event.surface
+  if not (surface and surface.valid and surface.planet) then
+    if player then player.print({ "tungsten-rain.no-planet" }) end
+    return
+  end
+  add_zone(player.force, surface, event.area)
+  player.print({ "tungsten-rain.zone-added", surface.planet.name })
+end
+
+local function on_alt_reverse_selected(event)
+  if event.item ~= "tungsten-rain-targeter" then return end
+  local player = game.get_player(event.player_index)
+  if not player then return end
+  local surface = event.surface
+  if not (surface and surface.valid) then return end
+  player.print(clear_zone(player.force, surface) and { "tungsten-rain.zone-removed" }
+                                                    or { "tungsten-rain.zone-none" })
+end
+
 script.on_event(defines.events.on_player_selected_area, on_selected)
+script.on_event(defines.events.on_player_reverse_selected_area, on_reverse_selected)
+script.on_event(defines.events.on_player_alt_reverse_selected_area, on_alt_reverse_selected)
 script.on_event(defines.events.on_player_alt_selected_area, on_alt_selected)
 
 -- ---------------------------------------------------------------------------
@@ -1357,6 +1736,25 @@ script.on_event(defines.events.on_tick, function(event)
   if storage.auto_sweep then
     local ok = pcall(auto_fire_step, event.tick)
     if not ok then storage.auto_sweep = nil end -- never wedge on a bad sweep
+  end
+
+  pcall(zone_defense_step, event.tick)
+  local volleys = storage.needle_volleys
+  if volleys and #volleys > 0 then
+    for i = #volleys, 1, -1 do
+      local v = volleys[i]
+      if event.tick >= v.tick then
+        land_volley(table.remove(volleys, i))
+      elseif v.fx and v.burst and event.tick >= v.tick - NEEDLE_SKY_TICKS then
+        needle_fx(v, event.tick)
+      end
+    end
+  end
+  -- forget stale claims now and then (entities that died some other way)
+  if event.tick % 3600 == 0 and storage.needle_claims then
+    for id, t in pairs(storage.needle_claims) do
+      if t <= event.tick then storage.needle_claims[id] = nil end
+    end
   end
 
   local strikes = storage.strikes
@@ -1465,8 +1863,28 @@ remote.add_interface("tungsten_rain", {
       charging_done = ring.charging_done,
       stations = ring.stations or 0,
       power = ring_power(ring, cfg()),
-      enabled = ring.enabled or false
+      enabled = ring.enabled or false,
+      needles = ring.needles or 0
     }
+  end,
+
+  -- cheat/testing: instantly add needle cartridges to a ring
+  -- /c remote.call("tungsten_rain", "charge_needles", "player", "nauvis", 100)
+  charge_needles = function(force_name, planet_name, count)
+    init_storage()
+    local ring = get_ring(force_name, planet_name)
+    ring.needles = (ring.needles or 0) + (count or 1)
+  end,
+
+  -- mark / clear a protected zone from script
+  -- /c remote.call("tungsten_rain", "add_zone", game.player.force, game.player.surface, {left_top={x=-50,y=-50}, right_bottom={x=50,y=50}})
+  add_zone = function(force, surface, area)
+    init_storage()
+    add_zone(force, surface, area)
+  end,
+  clear_zone = function(force, surface)
+    init_storage()
+    return clear_zone(force, surface)
   end,
 
   -- cheat/testing: instantly add charged rods to a ring

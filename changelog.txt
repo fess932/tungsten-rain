@@ -1,4 +1,38 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.4.0
+Date: 2026-09-18
+  Features:
+    - Needle cartridges and the protected zone. Reverse-select (right-drag) with the targeter to
+      mark the protected zone for the current planet — one per planet, a new one replaces the old;
+      alt-reverse-select clears it. The ring then guards that ground on its own: every enemy
+      that walks in (biters, spitters, nests, worms, pentapods) gets a needle and dies; demolishers
+      shrug needles off like a pellet — those still take a tungsten rod. No blast,
+      no crater, nothing of yours is touched. Needles cannot be aimed by hand — they only work
+      over the zone. Tungsten rods stay the manual heavy artillery.
+    - Cartridges are forged by the stations themselves out of the asteroid dust the ring sweeps
+      up: no item, no recipe, no delivery. Each station of an active ring adds 0.2 per second
+      (a full 20-station ring: 4 per second), up to 1000 per ring. One cartridge sprays up to
+      100 enemies within 32 tiles of its first target. All four numbers are map settings.
+    - The status window shows each ring's needle stock.
+    - A cartridge is visible all the way down: one hot streak falls from the sky, flashes open
+      over the group and fans out into a needle for every target, each tracking its biter.
+      Part of the "Visual shockwave" setting.
+    - Lore: a cartridge is a 10 kg bundle of 100 steel needles held at 15 km/s. It falls whole
+      under its plasma cocoon; at about a kilometre the spiral's induced current runs out, the
+      binding lets go and the cocoon itself blows the bundle open — one needle per target. Open
+      it in orbit instead and the needles would burn up like meteors on the way down.
+  Bugfixes:
+    - Rampant compressed squads no longer "rise from the dead". Rampant shows a whole squad as
+      one biter and pops the next one out where it died; a kill now clears the whole stack on
+      that spot. A compressed squad costs one needle instead of a cartridge per biter a second
+      apart, and a rod's blast no longer leaves the rest of the stack standing.
+    - Rampant eggs no longer hatch under fire. Eggs (and Rampant's other drones) are hostile
+      combat robots that spawn biters when they die; needles now target them too, and both
+      needles and rods vaporize them instead of killing them, so there is nothing left to hatch.
+  Optimizations:
+    - The zone is searched in 128-tile pieces, each once per second, spread evenly over the
+      ticks; an empty magazine or a paused ring costs nothing.
+---------------------------------------------------------------------------------------------------
 Version: 0.3.2
 Date: 2026-09-18
   Optimizations:

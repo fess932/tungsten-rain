@@ -37,7 +37,7 @@ do
   dofile("settings.lua")
   data = saved
 end
-check(#settings_protos == 19, "19 settings defined (got " .. #settings_protos .. ")")
+check(#settings_protos == 23, "23 settings defined (got " .. #settings_protos .. ")")
 for _, p in ipairs(settings_protos) do
   check(p.setting_type == "runtime-global", p.name .. " is runtime-global")
   check(p.default_value ~= nil, p.name .. " has default")
@@ -83,6 +83,9 @@ local targeter = by_key["selection-tool/tungsten-rain-targeter"]
 check(targeter ~= nil, "targeter selection-tool defined")
 check(targeter and targeter.select and targeter.select.mode and targeter.alt_select and targeter.alt_select.mode,
   "targeter has 2.0-format select/alt_select with mode")
+check(targeter and targeter.reverse_select and targeter.reverse_select.mode
+  and targeter.alt_reverse_select and targeter.alt_reverse_select.mode,
+  "targeter has reverse/alt-reverse select for protected zones")
 local tflags = {}
 for _, f in ipairs(targeter and targeter.flags or {}) do tflags[f] = true end
 check(tflags["only-in-cursor"] and tflags["spawnable"], "targeter is a cursor-only spawnable remote")
@@ -137,13 +140,26 @@ defines = {
     on_robot_built_entity = "on_robot_built_entity",
     script_raised_built = "script_raised_built",
     script_raised_revive = "script_raised_revive",
-    on_entity_cloned = "on_entity_cloned"
+    on_entity_cloned = "on_entity_cloned",
+    on_player_reverse_selected_area = "on_player_reverse_selected_area",
+    on_player_alt_reverse_selected_area = "on_player_alt_reverse_selected_area"
   },
   inventory = { hub_main = 1, cargo_landing_pad_main = 2 }
 }
 local remote_ifaces = {}
 remote = { add_interface = function(name, t) remote_ifaces[name] = t end }
-rendering = { draw_circle = function() end }
+local drawn = { rect = 0, line = 0 }
+rendering = {
+  draw_circle = function() end,
+  draw_rectangle = function()
+    drawn.rect = drawn.rect + 1
+    local obj = { valid = true }
+    obj.destroy = function() obj.valid = false end
+    return obj
+  end,
+  draw_line = function() drawn.line = drawn.line + 1 end,
+  draw_light = function() drawn.light = (drawn.light or 0) + 1 end
+}
 -- settings mock: defaults must match settings.lua
 local setting_defaults = {}
 for _, p in ipairs(settings_protos) do setting_defaults[p.name] = p.default_value end
@@ -170,7 +186,8 @@ local platform = {
 local force = { name = "player", platforms = { platform }, print = function() end }
 local fake_player = { print = function() end, force = force, gui = { screen = {} } }
 game = { tick = 0, forces = { player = force }, connected_players = {}, surfaces = {},
-         get_player = function() return fake_player end }
+         get_player = function() return fake_player end,
+         get_surface = function(i) for _, sf in pairs(game.surfaces) do if sf.index == i then return sf end end end }
 
 dofile("control.lua")
 
@@ -450,6 +467,178 @@ check(same, "sliced clustering matches the all-pairs reference on 2000 random ne
 check(took <= 600, "2000-nest sweep still finishes within the interval (" .. took .. " ticks)")
 setting_overrides["tungsten-rain-auto-fire"] = nil
 
+-- needle cartridges: forged by the stations, +rate per station per second
+print("needles:")
+-- start clean: rods queued by the auto-fire tests must not land in the middle of this
+storage.strikes, storage.dmg, storage.fx, storage.waves, storage.trails = {}, {}, {}, {}, {}
+check(handlers.events["on_player_reverse_selected_area"] ~= nil
+  and handlers.events["on_player_alt_reverse_selected_area"] ~= nil,
+  "reverse / alt-reverse select registered (zones)")
+local r = storage.rings.player.vulcanus
+r.needles, r.needle_frac = 0, 0
+storage.next_auto = math.huge
+nth({ tick = 500000 })
+check(r.needles == 4, "full 20-station ring forges 4 cartridges per second at 0.2/station (got " .. r.needles .. ")")
+r.needles = 998
+nth({ tick = 500060 })
+check(r.needles == 1000, "cartridges cap at 1000 (got " .. r.needles .. ")")
+r.enabled = false
+r.needles = 0
+nth({ tick = 500120 })
+check(r.needles == 0, "a paused ring forges nothing")
+r.enabled = true
+
+-- a zone marked by reverse-select; enemies inside get one needle each
+local raw_tick = on_tick
+on_tick = function(ev) TEST_TICK = ev.tick; raw_tick(ev) end
+local zone_units = {}
+local next_id = 90000
+local function unit(id, x, y, stack)
+  local u = { valid = true, unit_number = id, position = { x = x, y = y }, force = enemy,
+              name = "small-biter", type = "unit", health = 50 }
+  u.die = function()
+    u.valid = false; u.died = true; u.died_at = TEST_TICK
+    -- Rampant squad compression: the next biter of the stack pops out here
+    if stack and stack > 1 then
+      next_id = next_id + 1
+      zone_units[#zone_units + 1] = unit(next_id, x, y, stack - 1)
+    end
+  end
+  return u
+end
+local zone_find_calls = 0
+vulcanus_surface.find_entities_filtered = function(f)
+  if f.position then
+    local out = {}
+    for _, u in ipairs(zone_units) do
+      local q = u.position
+      local dx, dy = q.x - f.position.x, q.y - f.position.y
+      if u.valid and (not f.name or u.name == f.name) and dx * dx + dy * dy <= f.radius * f.radius then
+        out[#out + 1] = u
+        if f.limit and #out >= f.limit then break end
+      end
+    end
+    return out
+  end
+  zone_find_calls = zone_find_calls + 1
+  local out = {}
+  for _, u in ipairs(zone_units) do
+    local q = u.position
+    if u.valid and q.x >= f.area[1][1] and q.x < f.area[2][1] and q.y >= f.area[1][2] and q.y < f.area[2][2] then
+      out[#out + 1] = u
+    end
+  end
+  return out
+end
+handlers.events["on_player_reverse_selected_area"]({
+  item = "tungsten-rain-targeter", player_index = 1, surface = vulcanus_surface,
+  area = { left_top = { x = 0, y = 0 }, right_bottom = { x = 256, y = 128 } }
+})
+check(drawn.rect == 1, "zone outline drawn")
+check(#storage.zone_pieces == 2, "256x128 zone cut into two 128-tile scan pieces (got "
+  .. #storage.zone_pieces .. ")")
+
+-- 150 biters in one clump (radius 32) + 1 far off in the second piece + 1 outside
+for i = 1, 150 do zone_units[#zone_units + 1] = unit(1000 + i, 50 + (i % 10), 50 + math.floor(i / 10)) end
+zone_units[#zone_units + 1] = unit(2000, 200, 100)
+zone_units[#zone_units + 1] = unit(3000, 500, 500)
+r.needles = 10
+storage.needle_volleys = {}
+zone_find_calls = 0
+storage.zone_budget = 0
+for t = 600000, 600061 do on_tick({ tick = t }) end
+check(zone_find_calls == 2, "each zone piece searched once per second (got " .. zone_find_calls .. ")")
+check(r.needles == 7, "151 enemies in the zone -> 3 cartridges (100 + 50 + the lone one), got "
+  .. (10 - r.needles))
+local claimed = #storage.needle_volleys
+for t = 600062, 600080 do on_tick({ tick = t }) end
+check(r.needles == 7, "claimed targets are not fired on again while needles fly")
+for t = 600081, 600300 do on_tick({ tick = t }) end
+local dead_n, outside_alive = 0, zone_units[#zone_units].valid
+for _, u in ipairs(zone_units) do if u.died then dead_n = dead_n + 1 end end
+check(claimed == 3 and dead_n == 151, "every enemy in the zone takes a needle and dies (" .. dead_n .. ")")
+check(outside_alive, "the enemy outside the zone is left alone")
+local death_ticks, first_impact = {}, math.huge
+for _, v in ipairs(zone_units) do
+  if v.died_at then death_ticks[v.died_at] = true end
+end
+local n_ticks = 0
+for _ in pairs(death_ticks) do n_ticks = n_ticks + 1 end
+check(n_ticks >= 4, "biters die as their own needle lands, spread over " .. n_ticks .. " ticks")
+-- 3 cartridges: each a sky streak (20 ticks) + a two-part fan per target
+check(drawn.line == 3 * 20 + 2 * 151,
+  "one sky streak per cartridge, then a needle fanning out to every target (lines: " .. drawn.line .. ")")
+check(drawn.light == 3, "a burst flash per cartridge (" .. tostring(drawn.light) .. ")")
+
+-- a Rampant-compressed stack of 25 dies to one needle, not 25 cartridges
+zone_units = { unit(5000, 20, 20, 25) }
+r.needles = 5
+storage.zone_budget = 0
+local lines_before = drawn.line
+for t = 650000, 650200 do on_tick({ tick = t }) end
+check(drawn.line - lines_before == 20 + 2 + 24,
+  "every biter of a compressed stack gets its own needle streak (lines: " .. (drawn.line - lines_before) .. ")")
+local stack_dead = 0
+for _, u in ipairs(zone_units) do if u.died then stack_dead = stack_dead + 1 end end
+check(stack_dead == 25 and r.needles == 4,
+  "a compressed stack of 25 is cleared by one needle (" .. stack_dead .. " dead, "
+  .. (5 - r.needles) .. " cartridge used)")
+
+-- Rampant eggs (combat robots) are vaporized, not killed: a killed egg hatches
+local function egg(id, x, y)
+  local g = { valid = true, unit_number = id, position = { x = x, y = y }, force = enemy,
+              name = "egg-rampant", type = "combat-robot", health = 100 }
+  g.die = function() g.valid = false; g.hatched = true end
+  g.destroy = function() g.valid = false; g.vaporized = true end
+  return g
+end
+zone_units = { egg(7001, 30, 30), egg(7002, 34, 30) }
+r.needles = 5
+storage.zone_budget = 0
+for t = 660000, 660200 do on_tick({ tick = t }) end
+check(zone_units[1].vaporized and zone_units[2].vaporized
+  and not zone_units[1].hatched and not zone_units[2].hatched,
+  "needles vaporize Rampant eggs so they never hatch")
+zone_units = { egg(7003, 2000, 2000) }
+setting_overrides["tungsten-rain-fx"] = false
+storage.strikes = {}
+iface.strike({ x = 2000, y = 2000 }, vulcanus_surface, force)
+for t = 670000, 670400 do on_tick({ tick = t }) end
+setting_overrides["tungsten-rain-fx"] = nil
+check(zone_units[1].vaporized and not zone_units[1].hatched, "a rod's blast vaporizes eggs too")
+
+-- the same for a tungsten rod: its blast clears the whole compressed stack
+zone_units = { unit(6000, 2000, 2000, 25) }
+setting_overrides["tungsten-rain-fx"] = false
+storage.strikes = {}
+iface.strike({ x = 2000, y = 2000 }, vulcanus_surface, force)
+for t = 800000, 800400 do on_tick({ tick = t }) end
+setting_overrides["tungsten-rain-fx"] = nil
+local rod_dead = 0
+for _, u in ipairs(zone_units) do if u.died then rod_dead = rod_dead + 1 end end
+check(rod_dead == 25, "a rod's blast clears a compressed stack of 25 (" .. rod_dead .. " dead)")
+
+-- no cartridges -> no fire; alt-reverse clears the zone
+zone_units = { unit(4000, 10, 10) }
+r.needles = 0
+for t = 700000, 700100 do on_tick({ tick = t }) end
+check(zone_units[1].valid, "an empty needle magazine fires nothing")
+-- one zone per planet: a new selection replaces the old one
+handlers.events["on_player_reverse_selected_area"]({
+  item = "tungsten-rain-targeter", player_index = 1, surface = vulcanus_surface,
+  area = { left_top = { x = 1000, y = 1000 }, right_bottom = { x = 1100, y = 1100 } }
+})
+local nzones = 0
+for _ in pairs(storage.zones.player[vulcanus_surface.index]) do nzones = nzones + 1 end
+check(nzones == 1 and #storage.zone_pieces == 1 and storage.zone_pieces[1].area[1][1] == 1000,
+  "a new zone replaces the old one (one per planet)")
+handlers.events["on_player_alt_reverse_selected_area"]({
+  item = "tungsten-rain-targeter", player_index = 1, surface = vulcanus_surface,
+  area = { left_top = { x = 0, y = 0 }, right_bottom = { x = 1, y = 1 } }
+})
+check(#storage.zone_pieces == 0 and storage.zones.player[vulcanus_surface.index] == nil,
+  "alt-reverse-select clears the planet's zone")
+
 -- locale key sanity: every key referenced in control.lua exists in both locales
 print("locale:")
 local function locale_keys(path)
@@ -474,7 +663,9 @@ local used = { "tungsten-rain.no-rods", "tungsten-rain.ring-charging", "tungsten
                "tungsten-rain.gui-col-stations", "tungsten-rain.gui-col-power",
                "tungsten-rain.gui-col-rods", "tungsten-rain.gui-col-spinup",
                "tungsten-rain.gui-spinup-remaining", "tungsten-rain.gui-btn-pause",
-               "tungsten-rain.gui-btn-resume", "tungsten-rain.gui-no-rings" }
+               "tungsten-rain.gui-btn-resume", "tungsten-rain.gui-no-rings",
+               "tungsten-rain.gui-col-needles", "tungsten-rain.zone-added",
+               "tungsten-rain.zone-removed", "tungsten-rain.zone-none" }
 for _, loc in ipairs({ "locale/en/locale.cfg", "locale/ru/locale.cfg" }) do
   local keys = locale_keys(loc)
   for _, k in ipairs(used) do
