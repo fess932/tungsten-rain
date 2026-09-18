@@ -1,4 +1,20 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.3.1
+Date: 2026-09-18
+  Changes:
+    - Lore fix, round two (thanks again to the mod-portal physicists). At 0.01c a rod is ~400x
+      faster than orbital speed, so it never orbits: every station already bends it toward the
+      planet by its share of the circle, twenty times a lap. Firing is therefore not a "hard
+      downward kick" out of nowhere but a double turn: the station overdrives its magnet from a
+      capacitor bank for one pass and bends the rod about twice its usual angle, so the next chord
+      no longer clears the horizon and ends in the ground. A skipped turn would send the rod off on
+      the tangent into deep space — which is why it never was the answer.
+    - The recoil no longer holds the stations up — it would blow them away: each bend shoves a
+      station outward ~750x harder than gravity pulls it in. The stations now hang on a closed
+      tether hoop spun in orbit from asteroid carbon, and the recoil becomes hoop tension. This is
+      also what caps ring capacity. Station, targeter, technology and ring capacity descriptions
+      reworded (EN + RU). No gameplay change.
+---------------------------------------------------------------------------------------------------
 Version: 0.3.0
 Date: 2026-09-18
   Changes:

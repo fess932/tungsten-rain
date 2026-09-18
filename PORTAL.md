@@ -1,95 +1,62 @@
-# Tungsten Rain — Orbital Kinetic Bombardment
+**The projectile is not accelerated by the shot. The projectile lives accelerated.**
 
-> The projectile is not accelerated by the shot. The projectile lives accelerated.
+A 100 kg tungsten rod at 0.01c (3,000 km/s) carries ~107 kilotons of kinetic energy. No warhead. No radiation. At this velocity, the explosive is velocity.
 
-A 100 kg tungsten rod at 0.01c (3,000 km/s) carries ~107 kilotons of kinetic energy.
-No warhead. No radiation. At this velocity, the explosive **is** velocity.
+You don't build a gun. You build a storage ring: a necklace of superconducting deflector stations in low orbit, where pre-accelerated rods circulate for weeks, waiting. At four hundred times orbital speed a rod doesn't orbit at all — every station bends it toward the planet by its share of the circle, twenty times a lap, and the next station catches it. Holding the queue costs almost nothing: magnetic bending does no work. Firing is a double turn: one station overdrives its magnet from a capacitor bank and bends the rod twice as hard, and the next chord no longer clears the horizon — it ends in the ground. (Skipping a turn would do the opposite: the rod would leave on the tangent for deep space.)
 
-You don't build a gun. You build a **storage ring**: a necklace of superconducting
-deflector stations in low orbit, where pre-accelerated rods circulate for weeks,
-waiting. Firing doesn't open a breech — one station simply skips a turn, and a rod
-leaves the ring on its chord. Downward.
+**How it works**
 
-At night you can see the ring from the surface: friction against the residual
-atmosphere keeps the circulating rods glowing at 1700 K — a string of dim embers
-across the sky. Those are not stars. That is the queue.
+Research Kinetic Bombardment, then deliver Deflector Stations to the hub of a platform orbiting your target planet — the ring assembles itself, one station per second. Load tungsten rods into the same hub and the ring pulls them in and spins them up to cruising speed in the background. When the ring is hot, point the Mass Driver Targeter at the ground and wait three seconds for impact.
 
----
+Tungsten rods are crafted from tungsten plates, carbon, copper cable, and rocket fuel — the rod's own engine charge: it accelerates itself to 0.01c, while the ring merely holds it. Deflector stations are built from LDS, accumulators, processing units, and copper cable.
 
-## How it works
+**Where are the buttons?**
 
-Honest acceleration at the moment of firing is impossible — 4.5×10¹⁴ J in seconds
-is terawatts. So the mod does what particle physicists do:
+Both controls live in the shortcut bar and appear only after you research Kinetic Bombardment (needs Tungsten steel + Rocket silo):
 
-1. **Research** Kinetic Bombardment (after Tungsten steel + Rocket silo).
-2. **Activate** a ring above your target planet: alt-select anywhere on it with the
-   Mass Driver Targeter (a free shortcut-bar remote, like the artillery remote).
-   Rings start inactive and never touch your hubs until you say so — freighters can
-   load up at any planet without feeding the wrong orbit.
-3. **Build the ring**: craft Deflector Stations (LDS + accumulators + processing
-   units + copper cable). Each weighs exactly one rocket. Deliver them to the hub of
-   a platform parked at the planet — the ring assembles itself, one station per
-   second. **Twenty rockets, and the sky starts working for you.**
-4. **Feed it rods**: 8 tungsten plates + 3 carbon + 2 copper cable each — an 80 kg
-   tungsten core, a 15 kg ablative carbon sheath that vaporizes into a plasma cocoon
-   on entry, and a 5 kg copper Faraday spiral the deflectors grip inductively.
-   The ring pulls slugs from the hub and spins them up in the background.
-5. **Select a target.** Three seconds later (the rod has to come around to the
-   extraction window), a 67-tile circle stops existing. The impact area is charted
-   automatically, so you can see what you did. A fireball and spreading fires
-   finish whatever the shockwave missed.
+- the red button with the artillery-remote icon is the Mass Driver Targeter — select to fire, alt-select to enable or pause ring assembly above the planet you're on;
+- the button with the radar icon opens the Storage rings status window.
 
-## Physics you can feel
+Rings start inactive: alt-select with the targeter first, or the ring won't pull anything from your hubs.
 
-- **A half-built ring already fires.** Each station can only bend the rod by a fixed
-  angle, so top speed grows linearly with station count: damage scales as N², blast
-  radius as N^⅔, and weaker rings charge faster (energy ∝ v²). One station = a
-  popgun in 60 ticks. Twenty = 107 kt.
-- **Storing charged rods costs nothing.** Magnetic force is perpendicular to
-  velocity — bending does no work. A ring keeps its charge forever, even if the
-  delivery platform leaves orbit.
-- **No cooldown between shots.** A skipped turn spends nothing. Your rate of fire is
-  your stock of charged rods plus spin-up time. Save a full magazine, then drop it
-  all at once.
-- **Per-planet, per-force rings** with a live status window (second shortcut button):
-  stations, power, charged rods, spin-up countdown, pause/resume per planet.
+**Damage**
 
-## A damage type that cannot be resisted
+Every strike is Relativistic: damage is subtracted straight from health (a lethal hit deletes the target), so no percentage resist, flat resist, per-hit damage cap or "overkill protection" can stop it — exactly the armour packs like Rampant fixed bolt onto every damage type. The same impact also lands impact, physical and explosion damage through the normal system, so vanilla armour and other mods still react.
 
-The shockwave deals **Relativistic** damage by default — this mod's own damage type.
-Resistances only apply to damage types an entity lists, and nothing in any mod lists
-this one: the full number always goes through. Evolution never prepared a defense
-against objects arriving at a percent of lightspeed. Prefer playing by vanilla
-balance rules? Switch to **explosion** (what the nuke uses) in settings — or impact,
-laser, physical. A fire component rides along either way.
+It rolls out as an expanding shockwave: the core takes the penetrator hit at the moment of impact, the front rolls outward to the rim over a few seconds, and every pulse hits whatever is under it — so it grinds down even a fat regenerating biter. Add a fireball with ground fires, or turn it off, in settings.
 
-## Settings (all runtime)
+**Clearing a map**
 
-Damage, damage type (relativistic / explosion / impact / laser / physical), fire
-damage, ignite epicenter, blast radius (67 honest tiles; 300 = "relativistic
-honesty" mode, mind your UPS), stations per full ring, spin-up time, ring capacity,
-designation-to-impact delay, optional minimum interval between shots, friendly fire,
-trees.
+- Carpet bombardment — drag the targeter over a nest field and it rains one rod per nest cluster, clustered by blast radius so no rod is wasted (densest clusters first if the ring runs low).
+- Auto-fire (orbital patrol) — optional hands-off mode: every interval each ring bombs the nearest enemy nests, and worms, within radar coverage on its own.
+- Drop-and-go logistics — a freighter dumps its whole load of rods into the ring's buffer and leaves; the ring spins them up one at a time, no need to stay parked.
 
-## Remote API
+**Physics & features**
 
-```
-remote.call("tungsten_rain", "strike", position, surface, force)
-remote.call("tungsten_rain", "ring_status", "player", "nauvis")
-remote.call("tungsten_rain", "build_ring", "player", "nauvis")   -- cheat/testing
-remote.call("tungsten_rain", "charge_ring", "player", "nauvis", 5)
-```
+- Half-built rings already work: held speed scales with station count, damage as N squared, blast radius as the cube root — a weak ring hits softer but charges faster.
+- Holding charged rods is nearly free — but every bend shoves the station outward, hundreds of times harder than gravity pulls it in. So the stations hang on a closed tether hoop spun in orbit from asteroid carbon, and the recoil of the circulating tungsten becomes hoop tension. That's what caps how many rods a ring can hold.
+- No cooldown between shots by default: rate of fire is limited only by how many rods are charged and how fast the ring spins up new ones.
+- Per-planet, per-force rings, with a live status window: stations, power, charged rods and spin-up countdown, plus pause/resume.
+- A visible incoming tracer, an expanding shockwave, scorchmarks and smouldering smoke — all toggleable cosmetics.
 
-Open for auto-targeting integrations.
+**Settings**
 
-## Requires
+Adjustable at runtime: center damage, fire damage, blast radius, damage pulses and their timing, rod spin-up time, ring capacity, stations for a full ring, friendly fire, destroying trees, and the auto-fire mode (interval, radar range, whether to also hit worms).
 
-Space Age (tungsten). Built with Rampant in mind, works without it.
+**Factorio versions**
 
-## Roadmap
+0.3.x is for Factorio 2.1, 0.2.10 for Factorio 2.0. The game downloads the right one for your version.
 
-- Tier 2 "Pillar" behind Fulgora: 8.3 t, 9 Mt, 295 tiles. Holding it on the ring
-  takes 83× the centripetal force — physically impossible without superconducting
-  deflectors. The progression isn't flavor; it's statics.
-- Tier 3 behind Aquilo: powering spin-up from real generation (~370 MW per rod).
-- Custom rod icon, entry sound (whistle + impact), shadow + dust column animation.
+This mod started as a petty revenge fantasy against a Rampant nest that burned down my factory. Nauvis isn't Earth — but the biters don't get to know that.
+
+**Roadmap**
+
+Ideas in the works — partly thanks to the orbital-mechanics homework people have been doing in the comments:
+
+- Defensive fire: rings that also bomb the swarm running at your radars and outposts, not just the nests — so you can actually hold reclaimed ground.
+- Carpet and patrol that also catch worms and loose biter clusters, not only spawners.
+- Tiers of bombardment: a crude, inaccurate "rods from god" gravity drop early, with the full storage ring as the endgame upgrade.
+- Infinite accuracy research: early shots scatter by ~100 tiles, late shots land surgical.
+- A real orbital power economy: separate ring-keeping vs impact-deflection hardware, capacitor banks, higher-tier power (fusion, Aquilo), and a firing cooldown that comes from the recoil kick.
+
+Suggestions welcome. This thing is being reverse-engineered better in the comments than I engineered it.
