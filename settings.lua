@@ -8,14 +8,6 @@ data:extend({
     order = "a"
   },
   {
-    type = "string-setting",
-    name = "tungsten-rain-damage-type",
-    setting_type = "runtime-global",
-    default_value = "tungsten-kinetic",
-    allowed_values = { "tungsten-kinetic", "explosion", "impact", "laser", "physical" },
-    order = "a2"
-  },
-  {
     type = "double-setting",
     name = "tungsten-rain-fire-damage",
     setting_type = "runtime-global",
@@ -127,5 +119,39 @@ data:extend({
     setting_type = "runtime-global",
     default_value = true,
     order = "g"
+  },
+  {
+    -- automatic bombardment of enemy nests/worms within radar range
+    type = "bool-setting",
+    name = "tungsten-rain-auto-fire",
+    setting_type = "runtime-global",
+    default_value = false,
+    order = "h"
+  },
+  {
+    type = "double-setting",
+    name = "tungsten-rain-auto-interval",
+    setting_type = "runtime-global",
+    default_value = 10,
+    minimum_value = 1,
+    maximum_value = 600,
+    order = "ha"
+  },
+  {
+    -- coverage radius around each radar; 448 = vanilla radar far scan (14 chunks)
+    type = "int-setting",
+    name = "tungsten-rain-auto-range",
+    setting_type = "runtime-global",
+    default_value = 448,
+    minimum_value = 32,
+    maximum_value = 4096,
+    order = "hb"
+  },
+  {
+    type = "bool-setting",
+    name = "tungsten-rain-auto-worms",
+    setting_type = "runtime-global",
+    default_value = true,
+    order = "hc"
   }
 })

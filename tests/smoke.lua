@@ -37,7 +37,7 @@ do
   dofile("settings.lua")
   data = saved
 end
-check(#settings_protos == 16, "16 settings defined (got " .. #settings_protos .. ")")
+check(#settings_protos == 19, "19 settings defined (got " .. #settings_protos .. ")")
 for _, p in ipairs(settings_protos) do
   check(p.setting_type == "runtime-global", p.name .. " is runtime-global")
   check(p.default_value ~= nil, p.name .. " has default")
@@ -196,7 +196,6 @@ local s = storage.strikes[1]
 check(s.pos.x == 10 and s.pos.y == 20, "strike position recorded")
 check(s.radius == 67 and s.damage == 500000, "strike picks up settings (radius/damage)")
 check(s.fire_damage == 150000 and s.start_fires == true, "strike picks up fire settings")
-check(s.damage_type == "tungsten-kinetic", "shockwave damage type defaults to relativistic")
 check(s.fx == true, "strike carries the visual shockwave flag")
 
 -- ring assembly + charge cycle. Settings: 20 stations full, spinup 60 s = 3600 ticks.

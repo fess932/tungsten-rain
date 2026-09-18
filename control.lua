@@ -13,11 +13,17 @@ local WAVE_CANDIDATES = { "big-artillery-explosion", "big-explosion", "explosion
 local SMALL_SCORCH_CANDIDATES = { "medium-scorchmark", "small-scorchmark" }
 local SMOKE_CANDIDATES = { "nuclear-smouldering-smoke-source" }
 
+-- The strike always deals relativistic damage (subtracted straight from health,
+-- so no resistance, per-hit cap or overkill-protection applies). On targets it
+-- does not kill outright it also lands these conventional types through the normal
+-- damage system, so the impact reads as a kinetic blast to armour logic and other
+-- mods' on-damage hooks. The relativistic chunk is what guarantees the kill.
+local LOGICAL_DAMAGE_TYPES = { "impact", "physical", "explosion" }
+
 local function cfg()
   local s = settings.global
   return {
     damage        = s["tungsten-rain-damage"].value,
-    damage_type   = s["tungsten-rain-damage-type"].value,
     fire_damage   = s["tungsten-rain-fire-damage"].value,
     start_fires   = s["tungsten-rain-start-fires"].value,
     dmg_pulses    = s["tungsten-rain-damage-pulses"].value,
@@ -32,7 +38,11 @@ local function cfg()
     fx            = s["tungsten-rain-fx"].value,
     require_rods  = s["tungsten-rain-require-rods"].value,
     friendly_fire = s["tungsten-rain-friendly-fire"].value,
-    spare_trees   = not s["tungsten-rain-destroy-trees"].value
+    spare_trees   = not s["tungsten-rain-destroy-trees"].value,
+    auto_fire     = s["tungsten-rain-auto-fire"].value,
+    auto_interval = math.max(60, math.floor(s["tungsten-rain-auto-interval"].value * 60)), -- s -> ticks
+    auto_range    = s["tungsten-rain-auto-range"].value,
+    auto_worms    = s["tungsten-rain-auto-worms"].value
   }
 end
 
@@ -43,6 +53,7 @@ local function init_storage()
   storage.waves = storage.waves or {} -- live continuous blast waves (render objects)
   storage.trails = storage.trails or {} -- fading tracer afterglows post-impact
   storage.next_shot = storage.next_shot or {}
+  storage.next_auto = storage.next_auto or 0 -- next tick the auto-fire sweep may run
   -- rings[force_name][planet_name] =
   --   { charged = N, loaded = N, charging_done = tick or nil, stations = N, enabled = bool }
   --   loaded   = rods pulled from the hub, buffered, waiting their turn to spin up
@@ -154,6 +165,7 @@ end
 
 local GUI_FRAME = "tungsten-rain-status"
 local rebuild_status -- defined in the GUI section below
+local auto_fire      -- defined after the targeting helpers
 
 -- Background assembly and spin-up, runs once a second.
 script.on_nth_tick(60, function(event)
@@ -200,15 +212,31 @@ script.on_nth_tick(60, function(event)
                 and try_consume_from_hub(force, planet_name, "tungsten-rod") do
               ring.loaded = (ring.loaded or 0) + 1
             end
-
-            -- spin up one buffered rod at a time; weaker rings charge faster
-            if not ring.charging_done and (ring.loaded or 0) > 0 then
-              ring.loaded = ring.loaded - 1
-              ring.charging_done = event.tick + spinup_ticks(ring, c)
-            end
           end
         end
       end
+    end
+  end
+
+  -- 3) spin up the next buffered rod in EVERY ring, one at a time — independent of
+  --    any platform being parked. Once rods are pulled into the buffer the freighter
+  --    can leave; the ring keeps charging them on its own (a weaker ring charges
+  --    faster). Runs after intake so a rod pulled this tick starts spinning at once.
+  for _, by_planet in pairs(storage.rings) do
+    for _, ring in pairs(by_planet) do
+      if (ring.stations or 0) > 0 and not ring.charging_done and (ring.loaded or 0) > 0 then
+        ring.loaded = ring.loaded - 1
+        ring.charging_done = event.tick + spinup_ticks(ring, c)
+      end
+    end
+  end
+
+  -- 4) automatic bombardment of enemy nests/worms within radar range
+  if c.auto_fire and auto_fire then
+    storage.next_auto = storage.next_auto or 0
+    if event.tick >= storage.next_auto then
+      pcall(function() auto_fire(c, event.tick) end)
+      storage.next_auto = event.tick + c.auto_interval
     end
   end
 
@@ -453,25 +481,29 @@ local function damage_area(d)
         local dx = e.position.x - d.pos.x
         local dy = e.position.y - d.pos.y
         local dist = math.sqrt(dx * dx + dy * dy)
-        if dist > d.r_inner and dist <= d.r_outer then
+        -- Damage the whole GROWING disc the front has swept, on every pulse: a
+        -- target under the blast takes a hit on each pass (the center gets hammered
+        -- pulse after pulse, the rim once the front reaches it). No "hit once" cap
+        -- and no band gaps to slip through — the point is that it dies, even if it
+        -- takes ten hits to get there.
+        if dist <= d.r_outer then
           local falloff = math.max(0.3, 1 - dist / d.radius)
           local dmg = d.damage * falloff
-          local dtype = d.damage_type or "tungsten-kinetic"
-          if dtype == "tungsten-kinetic" then
-            -- Relativistic: bypass ALL resistance. Some modpacks (e.g. Rampant
-            -- fixed) blanket-resist every registered damage type at
-            -- data-final-fixes, custom ones included, so a novel type is not
-            -- enough. At 0.01c armour is a rounding error, so we subtract straight
-            -- from health (no percentage/flat resist applies) and delete outright
-            -- when the hit would kill.
-            if dmg >= e.health then
-              pcall(function() e.die(d.force or "neutral") end)
-            else
-              pcall(function() e.health = e.health - dmg end)
-            end
+          -- Relativistic core: the kill always goes straight through health,
+          -- bypassing every resistance, per-hit cap and overkill-protection some
+          -- modpacks (Rampant fixed) bolt onto the damage system at
+          -- data-final-fixes. At 0.01c armour is a rounding error. A lethal hit
+          -- deletes the target outright; a survivor loses the rest from health.
+          if dmg >= e.health then
+            pcall(function() e.die(d.force or "neutral") end)
           else
-            -- any other configured type plays by vanilla resistance rules
-            pcall(e.damage, dmg, d.force or "neutral", dtype)
+            pcall(function() e.health = e.health - dmg end)
+            -- the same impact also strikes with every logical conventional type
+            -- (these obey vanilla resistances) so armour and other mods' on-damage
+            -- hooks still see a kinetic blast; the health chunk above is the kill.
+            for _, dt in ipairs(LOGICAL_DAMAGE_TYPES) do
+              if e.valid then pcall(e.damage, dmg, d.force or "neutral", dt) end
+            end
           end
           if e.valid and d.fire_damage and d.fire_damage > 0 then
             pcall(e.damage, d.fire_damage * falloff, d.force or "neutral", "fire")
@@ -644,7 +676,6 @@ local function do_strike(s)
       radius = s.radius,
       damage = s.damage,
       fire_damage = s.fire_damage,
-      damage_type = s.damage_type,
       force = s.force,
       friendly_fire = s.friendly_fire,
       spare_trees = s.spare_trees,
@@ -733,6 +764,156 @@ end
 -- ---------------------------------------------------------------------------
 -- Targeting
 -- ---------------------------------------------------------------------------
+
+-- Greedily cover a set of nest positions with as few strikes as possible: each
+-- strike's blast (radius) wipes everything within it, so we cluster nests that
+-- fall inside one radius into a single rod. Returns strike points sorted by how
+-- many nests each covers (densest first), so a rod-limited carpet hits the worst
+-- clusters before running dry. This is what makes a carpet economize rods.
+local function cluster_strikes(targets, radius)
+  local remaining = {}
+  for i, t in ipairs(targets) do remaining[i] = t end
+  local r2 = radius * radius
+  local pts = {}
+  while next(remaining) do
+    local seed_i, seed = next(remaining)
+    -- centroid of every nest within one radius of the seed
+    local cx, cy, n = 0, 0, 0
+    for _, t in pairs(remaining) do
+      local dx, dy = t.x - seed.x, t.y - seed.y
+      if dx * dx + dy * dy <= r2 then
+        cx = cx + t.x; cy = cy + t.y; n = n + 1
+      end
+    end
+    local sx, sy = cx / n, cy / n
+    -- drop everything the strike at the centroid actually covers
+    local covered = 0
+    for i, t in pairs(remaining) do
+      local dx, dy = t.x - sx, t.y - sy
+      if dx * dx + dy * dy <= r2 then
+        remaining[i] = nil; covered = covered + 1
+      end
+    end
+    remaining[seed_i] = nil -- safety: seed gone even if the centroid drifted off it
+    pts[#pts + 1] = { x = sx, y = sy, count = math.max(1, covered) }
+  end
+  table.sort(pts, function(a, b) return a.count > b.count end)
+  return pts
+end
+
+-- Queue one incoming rod at pos plus its target marker.
+local function schedule_strike(surface, force, pos, radius, power, c, now)
+  table.insert(storage.strikes, {
+    tick = now + c.delay,
+    pos = pos,
+    surface = surface,
+    force = force,
+    radius = radius,
+    damage = c.damage * power,
+    fire_damage = c.fire_damage * power,
+    start_fires = c.start_fires,
+    fx = c.fx,
+    friendly_fire = c.friendly_fire,
+    spare_trees = c.spare_trees,
+    pulses = c.dmg_pulses,
+    interval = c.dmg_interval
+  })
+  pcall(function()
+    rendering.draw_circle{
+      color = { r = 1, g = 0.1, b = 0.1, a = 0.6 },
+      radius = radius,
+      width = 4,
+      target = pos,
+      surface = surface,
+      time_to_live = math.max(c.delay, 1),
+      draw_on_ground = true
+    }
+  end)
+end
+
+-- Automatic bombardment: every force's rings hit the nearest enemy nests (and,
+-- optionally, worms) sitting inside radar coverage, clustered by blast radius so
+-- rods are not wasted, nearest threats first, capped by charged rods. Assigned to
+-- the forward-declared `auto_fire` so on_nth_tick (defined earlier) can call it.
+auto_fire = function(c, tick)
+  local types = c.auto_worms and { "unit-spawner", "turret" } or { "unit-spawner" }
+  local rr = c.auto_range
+  for _, force in pairs(game.forces) do
+    for _, surface in pairs(game.surfaces) do
+      if surface.valid and surface.planet then
+        local ok_r, radars = pcall(function()
+          return surface.find_entities_filtered{ type = "radar", force = force }
+        end)
+        if ok_r and radars and #radars > 0 then
+          local ring = get_ring(force.name, surface.planet.name)
+          finish_charging(ring, tick)
+          local free = not c.require_rods
+          if free or (ring.enabled and ring.stations > 0 and ring.charged > 0) then
+            local power = free and 1 or ring_power(ring, c)
+            local radius = math.max(5, c.radius * power ^ (1 / 3))
+
+            -- gather enemy targets within radar range (deduped across radars)
+            local targets, seen = {}, {}
+            for _, radar in pairs(radars) do
+              if radar.valid then
+                local rp = radar.position
+                local ok_e, ents = pcall(function()
+                  return surface.find_entities_filtered{
+                    area = { { rp.x - rr, rp.y - rr }, { rp.x + rr, rp.y + rr } },
+                    type = types
+                  }
+                end)
+                if ok_e and ents then
+                  for _, e in pairs(ents) do
+                    if e.valid and e.force ~= force and not force.get_friend(e.force) then
+                      local key = e.unit_number
+                      if not key or not seen[key] then
+                        if key then seen[key] = true end
+                        targets[#targets + 1] = e.position
+                      end
+                    end
+                  end
+                end
+              end
+            end
+
+            if #targets > 0 then
+              local pts = cluster_strikes(targets, radius)
+              -- nearest-threat first: sort clusters by distance to closest radar
+              for _, p in ipairs(pts) do
+                local best = math.huge
+                for _, radar in pairs(radars) do
+                  if radar.valid then
+                    local dx, dy = p.x - radar.position.x, p.y - radar.position.y
+                    local d = dx * dx + dy * dy
+                    if d < best then best = d end
+                  end
+                end
+                p.d = best
+              end
+              table.sort(pts, function(a, b) return a.d < b.d end)
+
+              local avail = free and math.huge or ring.charged
+              local fired = 0
+              for _, p in ipairs(pts) do
+                if fired >= avail then break end
+                schedule_strike(surface, force, p, radius, power, c, tick)
+                fired = fired + 1
+              end
+              if not free then ring.charged = ring.charged - fired end
+              if fired > 0 then
+                pcall(function()
+                  force.print({ "tungsten-rain.auto", fired, surface.planet.name })
+                end)
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+end
+
 local function on_selected(event)
   if event.item ~= "tungsten-rain-targeter" then return end
   local player = game.get_player(event.player_index)
@@ -756,15 +937,16 @@ local function on_selected(event)
     return
   end
 
-  local remaining = "∞"
-  local power = 1 -- energy fraction of a full-power shot
+  local ring -- set when rods are required
+  local power = 1       -- energy fraction of a full-power shot
+  local available = math.huge -- charged rods we may fire this select
   if c.require_rods then
     local planet = surface.planet
     if not planet then
       player.print({ "tungsten-rain.no-planet" })
       return
     end
-    local ring = get_ring(force.name, planet.name)
+    ring = get_ring(force.name, planet.name)
     finish_charging(ring, now)
     if ring.stations < 1 then
       if ring.enabled then
@@ -782,52 +964,61 @@ local function on_selected(event)
       end
       return
     end
-    ring.charged = ring.charged - 1
-    remaining = ring.charged
     power = ring_power(ring, c)
+    available = ring.charged
   end
 
   -- scale with ring power: damage ~ energy, radius ~ energy^(1/3)
   local radius = math.max(5, c.radius * power ^ (1 / 3))
-
   local area = event.area
-  local pos = {
-    x = (area.left_top.x + area.right_bottom.x) / 2,
-    y = (area.left_top.y + area.right_bottom.y) / 2
-  }
 
-  storage.next_shot[force.name] = now + c.cooldown
-  table.insert(storage.strikes, {
-    tick = now + c.delay,
-    pos = pos,
-    surface = surface,
-    force = force,
-    radius = radius,
-    damage = c.damage * power,
-    damage_type = c.damage_type,
-    fire_damage = c.fire_damage * power,
-    start_fires = c.start_fires,
-    fx = c.fx,
-    friendly_fire = c.friendly_fire,
-    spare_trees = c.spare_trees,
-    pulses = c.dmg_pulses,
-    interval = c.dmg_interval
-  })
-
+  -- carpet mode: rain a rod on every enemy nest in the selection, but cluster
+  -- them by blast radius so one rod covers a whole clump — no wasted slugs.
+  local nests = {}
   pcall(function()
-    rendering.draw_circle{
-      color = { r = 1, g = 0.1, b = 0.1, a = 0.6 },
-      radius = radius,
-      width = 4,
-      target = pos,
-      surface = surface,
-      time_to_live = math.max(c.delay, 1),
-      draw_on_ground = true
-    }
+    for _, e in pairs(surface.find_entities_filtered{ area = area, type = "unit-spawner" }) do
+      if e.valid and e.force ~= force then nests[#nests + 1] = e.position end
+    end
   end)
 
-  player.print({ "tungsten-rain.incoming", remaining, math.floor(power * 100 + 0.5) })
-  pcall(function() surface.play_sound{ path = "utility/new_objective", position = pos } end)
+  local points
+  if #nests > 0 then
+    points = cluster_strikes(nests, radius)
+  else
+    -- nothing to carpet: a single strike at the center, as before
+    points = { {
+      x = (area.left_top.x + area.right_bottom.x) / 2,
+      y = (area.left_top.y + area.right_bottom.y) / 2
+    } }
+  end
+
+  local fired = 0
+  for _, p in ipairs(points) do
+    if fired >= available then break end
+    schedule_strike(surface, force, p, radius, power, c, now)
+    fired = fired + 1
+  end
+  if fired == 0 then return end
+
+  if c.require_rods then
+    ring.charged = ring.charged - fired
+  end
+  storage.next_shot[force.name] = now + c.cooldown
+
+  local left = c.require_rods and ring.charged or "∞"
+  if #nests > 0 then
+    local uncovered = #points - fired
+    if uncovered > 0 then
+      player.print({ "tungsten-rain.carpet-short", fired, uncovered, left })
+    else
+      player.print({ "tungsten-rain.carpet", fired, left, math.floor(power * 100 + 0.5) })
+    end
+  else
+    player.print({ "tungsten-rain.incoming", left, math.floor(power * 100 + 0.5) })
+  end
+  pcall(function()
+    surface.play_sound{ path = "utility/new_objective", position = points[1] }
+  end)
 end
 
 -- Alt-select with the targeter: toggle ring assembly above the current planet.
@@ -946,7 +1137,6 @@ remote.add_interface("tungsten_rain", {
       force = force,
       radius = c.radius,
       damage = c.damage,
-      damage_type = c.damage_type,
       fire_damage = c.fire_damage,
       start_fires = c.start_fires,
       fx = c.fx,

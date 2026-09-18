@@ -1,4 +1,97 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.3.0
+Date: 2026-09-18
+  Changes:
+    - Ported to Factorio 2.1. The mod now requires Factorio 2.1 (base and space-age >= 2.1);
+      Factorio 2.0 players should stay on 0.2.10. No code changes were needed: the mod uses none
+      of the APIs removed or renamed in 2.1, and explosion/scorchmark effects are still picked from
+      a fallback list, so a renamed vanilla prototype degrades to the next candidate instead of
+      crashing. No gameplay change.
+  Bugfixes:
+    - Fixed the 0.2.9 changelog entry, which was missing its Version header (two Date lines under
+      0.2.10). Factorio treats a malformed changelog as unreadable and hides it in the in-game mod
+      list.
+---------------------------------------------------------------------------------------------------
+Version: 0.2.10
+Date: 2026-06-15
+  Changes:
+    - Lore fix (thanks to the mod-portal physicists). "A shot is just a skipped turn" was geometrically
+      wrong: a rod on straight chords between stations stays outside the ring forever, so a station
+      simply not deflecting only widens its orbit — it never hits the ground. Firing is now described
+      honestly: the firing station dumps its capacitor reserve into one hard inward kick that bends the
+      rod off its safe chord and down into the atmosphere. Also owned the recoil: magnetic bending does
+      no work on the rod (cheap to hold), but every bend kicks back on the station, so the ring is
+      really a swarm of statites holding themselves up on the recoil of the tungsten they throw — let
+      one lose power and it falls out of the sky. Item, station, technology and cooldown descriptions
+      reworded (EN + RU). No gameplay change.
+---------------------------------------------------------------------------------------------------
+Version: 0.2.9
+Date: 2026-06-15
+  Bugfixes:
+    - Buffered rods now keep spinning up after the platform leaves. The "start the next rod's
+      spin-up" step was nested inside the parked-platform loop, so once the freighter dropped its
+      load and departed, the ring finished the rod already charging and then stalled — the buffered
+      rods just sat there. It now runs as its own pass over every ring each second, independent of
+      any platform being parked: deliver a load, fly away, and the ring charges the whole buffer one
+      rod at a time on its own. This was the whole point of the buffer (0.2.2); it only worked while
+      parked. Pulling rods from the hub and assembling stations still need a platform in orbit.
+---------------------------------------------------------------------------------------------------
+Version: 0.2.8
+Date: 2026-06-15
+  Changes:
+    - Pulses now stack on the same target instead of hitting it once. Every pulse damages the whole
+      growing disc the shockwave front has swept, so a target under the blast takes a hit on every
+      pass: the center is hammered pulse after pulse, the rim once the front reaches it. Dropped the
+      "each entity caught once" rule — the point is that it dies, even if it takes all the pulses to
+      get there. A target under the crosshair now eats up to (pulses) hits, so even a low-power ring
+      grinds it down.
+---------------------------------------------------------------------------------------------------
+Version: 0.2.7
+Date: 2026-06-15
+  Bugfixes:
+    - Damage no longer leaves gaps. Each expanding pulse used to damage only its own thin ring band
+      (r_inner, r_outer], which had two holes: a target sitting exactly on the impact point (distance
+      0) was skipped, and a moving biter could slip between two bands — the front reached its old
+      spot, it ran into a band that had already passed, and nothing ever hit it. The damage now rolls
+      out as a GROWING disc: every mobile target (anything with a unit_number) is caught once, the
+      instant the front reaches it, tracked in a shared per-strike set so it can't be hit twice and
+      can't escape by moving. Static entities (no unit_number, never move) keep the thin band. Net
+      effect: a biter standing under the crosshair now actually dies. (If one still survives, the
+      ring power is too low — damage is 500k x power x falloff; finish the ring or raise the damage.)
+---------------------------------------------------------------------------------------------------
+Version: 0.2.6
+Date: 2026-06-15
+  Changes:
+    - The "Shockwave damage type" setting is gone. The strike is now ALWAYS relativistic and there
+      is nothing to misconfigure: damage is subtracted straight from health (a lethal hit deletes
+      the target), so no percentage resist, flat resist, per-hit damage cap or "overkill protection"
+      can stop it — exactly the armour Rampant fixed bolts onto every damage type, custom ones
+      included, at data-final-fixes. This is what kills a 60k-HP regenerating biter that shrugged off
+      a capped conventional hit. The same impact additionally lands impact + physical + explosion
+      damage through the normal damage system (so vanilla armour and other mods' on-damage hooks
+      still react), but the health chunk is what guarantees the kill. Reminder: damage still scales
+      with ring power (full ring one-shots such a biter across the whole radius; a half-built ring
+      may not reach the rim).
+---------------------------------------------------------------------------------------------------
+Version: 0.2.5
+Date: 2026-06-14
+  Features:
+    - Auto-fire (orbital patrol): an optional mode where the rings fire on their own. Every interval
+      each ring rains rods on the nearest enemy nests — and, optionally, worms — sitting within
+      radar coverage, clustered by blast radius (no wasted rods), nearest threats first, capped by
+      charged rods. Off by default. Four new settings: enable, interval, range around radars
+      (default 448 = vanilla radar far scan), and whether to also hit worms.
+---------------------------------------------------------------------------------------------------
+Version: 0.2.4
+Date: 2026-06-14
+  Features:
+    - Carpet bombardment: dragging the targeter over a nest field now rains a rod on every enemy
+      spawner inside — but the targets are clustered by blast radius first, so one rod covers a
+      whole clump and no slug is wasted. Strike points are sorted densest-first, so if the ring
+      runs low on charged rods it hits the worst clusters before running dry. A small box or a
+      click on empty ground still does a single strike at the center. This is the answer to nests
+      breeding faster than you can pick them off one at a time.
+---------------------------------------------------------------------------------------------------
 Version: 0.2.3
 Date: 2026-06-14
   Bugfixes:
