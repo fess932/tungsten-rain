@@ -40,7 +40,7 @@ local function cfg()
     friendly_fire = s["tungsten-rain-friendly-fire"].value,
     spare_trees   = not s["tungsten-rain-destroy-trees"].value,
     auto_fire     = s["tungsten-rain-auto-fire"].value,
-    auto_interval = math.max(60, math.floor(s["tungsten-rain-auto-interval"].value * 60)), -- s -> ticks
+    auto_interval = math.max(600, math.floor(s["tungsten-rain-auto-interval"].value * 60)), -- s -> ticks, min 10 s
     auto_range    = s["tungsten-rain-auto-range"].value,
     auto_worms    = s["tungsten-rain-auto-worms"].value
   }
@@ -54,6 +54,24 @@ local function init_storage()
   storage.trails = storage.trails or {} -- fading tracer afterglows post-impact
   storage.next_shot = storage.next_shot or {}
   storage.next_auto = storage.next_auto or 0 -- next tick the auto-fire sweep may run
+  -- auto_sweep: the auto-fire pass in progress, worked off a little every tick
+  -- (see auto_fire_step); nil when idle
+  -- radars[surface_index][unit_number] = radar entity. Kept up to date from build
+  -- events so auto-fire never has to search a whole planet for them; dead ones
+  -- are pruned lazily. Filled once by a full scan when the registry is new.
+  if not storage.radars then
+    storage.radars = {}
+    for _, surface in pairs(game.surfaces) do
+      local ok, found = pcall(function() return surface.find_entities_filtered{ type = "radar" } end)
+      if ok and found then
+        local by_id = {}
+        for _, r in pairs(found) do
+          if r.valid and r.unit_number then by_id[r.unit_number] = r end
+        end
+        storage.radars[surface.index] = by_id
+      end
+    end
+  end
   -- rings[force_name][planet_name] =
   --   { charged = N, loaded = N, charging_done = tick or nil, stations = N, enabled = bool }
   --   loaded   = rods pulled from the hub, buffered, waiting their turn to spin up
@@ -234,7 +252,7 @@ script.on_nth_tick(60, function(event)
   -- 4) automatic bombardment of enemy nests/worms within radar range
   if c.auto_fire and auto_fire then
     storage.next_auto = storage.next_auto or 0
-    if event.tick >= storage.next_auto then
+    if event.tick >= storage.next_auto and not storage.auto_sweep then
       pcall(function() auto_fire(c, event.tick) end)
       storage.next_auto = event.tick + c.auto_interval
     end
@@ -770,35 +788,92 @@ end
 -- fall inside one radius into a single rod. Returns strike points sorted by how
 -- many nests each covers (densest first), so a rod-limited carpet hits the worst
 -- clusters before running dry. This is what makes a carpet economize rods.
-local function cluster_strikes(targets, radius)
-  local remaining = {}
-  for i, t in ipairs(targets) do remaining[i] = t end
-  local r2 = radius * radius
-  local pts = {}
-  while next(remaining) do
-    local seed_i, seed = next(remaining)
-    -- centroid of every nest within one radius of the seed
-    local cx, cy, n = 0, 0, 0
-    for _, t in pairs(remaining) do
-      local dx, dy = t.x - seed.x, t.y - seed.y
-      if dx * dx + dy * dy <= r2 then
-        cx = cx + t.x; cy = cy + t.y; n = n + 1
-      end
-    end
-    local sx, sy = cx / n, cy / n
-    -- drop everything the strike at the centroid actually covers
-    local covered = 0
-    for i, t in pairs(remaining) do
-      local dx, dy = t.x - sx, t.y - sy
-      if dx * dx + dy * dy <= r2 then
-        remaining[i] = nil; covered = covered + 1
-      end
-    end
-    remaining[seed_i] = nil -- safety: seed gone even if the centroid drifted off it
-    pts[#pts + 1] = { x = sx, y = sy, count = math.max(1, covered) }
+-- Points are bucketed into a grid of radius-sized cells, so each seed only looks
+-- at its neighbourhood instead of every remaining nest: linear in the number of
+-- nests rather than quadratic. The work is resumable — cluster_run does a
+-- bounded number of seeds per call — so auto-fire can spread it over many
+-- ticks; the state is plain tables and lives in storage between ticks.
+local function cluster_new(targets, radius)
+  local cell = math.max(1, radius)
+  local grid = {}
+  for i, t in ipairs(targets) do
+    local gx, gy = math.floor(t.x / cell), math.floor(t.y / cell)
+    local col = grid[gx]
+    if not col then col = {}; grid[gx] = col end
+    local bucket = col[gy]
+    if not bucket then bucket = {}; col[gy] = bucket end
+    bucket[#bucket + 1] = i
   end
+  local alive = {}
+  for i = 1, #targets do alive[i] = true end
+  return { targets = targets, cell = cell, r2 = radius * radius, grid = grid,
+           alive = alive, next_seed = 1, pts = {} }
+end
+
+-- calls fn(i, t) for every live point within one cell of (x, y)
+local function cluster_each_near(st, x, y, fn)
+  local cell, grid, alive, targets = st.cell, st.grid, st.alive, st.targets
+  local gx, gy = math.floor(x / cell), math.floor(y / cell)
+  for ix = gx - 1, gx + 1 do
+    local col = grid[ix]
+    if col then
+      for iy = gy - 1, gy + 1 do
+        local bucket = col[iy]
+        if bucket then
+          for _, i in ipairs(bucket) do
+            if alive[i] then fn(i, targets[i]) end
+          end
+        end
+      end
+    end
+  end
+end
+
+-- Process up to `budget` seeds; returns true once every point is clustered.
+local function cluster_run(st, budget)
+  local targets, alive, r2, pts = st.targets, st.alive, st.r2, st.pts
+  local n_targets = #targets
+  local seed_i = st.next_seed
+  while budget > 0 and seed_i <= n_targets do
+    if alive[seed_i] then
+      budget = budget - 1
+      local seed = targets[seed_i]
+      -- centroid of every nest within one radius of the seed
+      local cx, cy, n = 0, 0, 0
+      cluster_each_near(st, seed.x, seed.y, function(_, t)
+        local dx, dy = t.x - seed.x, t.y - seed.y
+        if dx * dx + dy * dy <= r2 then
+          cx = cx + t.x; cy = cy + t.y; n = n + 1
+        end
+      end)
+      local sx, sy = cx / n, cy / n
+      -- drop everything the strike at the centroid actually covers
+      local covered = 0
+      cluster_each_near(st, sx, sy, function(i, t)
+        local dx, dy = t.x - sx, t.y - sy
+        if dx * dx + dy * dy <= r2 then
+          alive[i] = false; covered = covered + 1
+        end
+      end)
+      alive[seed_i] = false -- safety: seed gone even if the centroid drifted off it
+      pts[#pts + 1] = { x = sx, y = sy, count = math.max(1, covered) }
+    end
+    seed_i = seed_i + 1
+  end
+  st.next_seed = seed_i
+  return seed_i > n_targets
+end
+
+local function cluster_finish(st)
+  local pts = st.pts
   table.sort(pts, function(a, b) return a.count > b.count end)
   return pts
+end
+
+local function cluster_strikes(targets, radius)
+  local st = cluster_new(targets, radius)
+  cluster_run(st, math.huge)
+  return cluster_finish(st)
 end
 
 -- Queue one incoming rod at pos plus its target marker.
@@ -831,86 +906,314 @@ local function schedule_strike(surface, force, pos, radius, power, c, now)
   end)
 end
 
+-- Radar coverage as a handful of non-overlapping rectangles. Each radar covers a
+-- square of +-range tiles, rounded out to whole chunks (the radar's own scan is
+-- chunk-based too). Overlapping squares are merged per chunk row, and identical
+-- row spans stacked into rectangles, so every tile in range is searched exactly
+-- once — a base with dozens of radars used to be searched once per radar.
+local function radar_coverage(radars, range)
+  local rows = {}
+  for _, radar in pairs(radars) do
+    if radar.valid then
+      local p = radar.position
+      local x0, x1 = math.floor((p.x - range) / 32), math.floor((p.x + range) / 32)
+      for cy = math.floor((p.y - range) / 32), math.floor((p.y + range) / 32) do
+        local row = rows[cy]
+        if not row then row = {}; rows[cy] = row end
+        row[#row + 1] = { x0, x1 }
+      end
+    end
+  end
+  local ys = {}
+  for cy in pairs(rows) do ys[#ys + 1] = cy end
+  table.sort(ys)
+
+  local rects, open = {}, {}
+  for _, cy in ipairs(ys) do
+    local spans = rows[cy]
+    table.sort(spans, function(u, v) return u[1] < v[1] end)
+    local next_open = {}
+    local cur
+    local function close_span()
+      local key = cur[1] .. ":" .. cur[2]
+      local r = open[key]
+      if r and r.y1 == cy - 1 then
+        r.y1 = cy
+      else
+        r = { x0 = cur[1], x1 = cur[2], y0 = cy, y1 = cy }
+        rects[#rects + 1] = r
+      end
+      next_open[key] = r
+    end
+    for _, span in ipairs(spans) do
+      if cur and span[1] <= cur[2] + 1 then
+        if span[2] > cur[2] then cur[2] = span[2] end
+      else
+        if cur then close_span() end
+        cur = { span[1], span[2] }
+      end
+    end
+    close_span()
+    open = next_open
+  end
+
+  -- cut into pieces of at most PIECE x PIECE chunks, so one search is small
+  -- enough to do a few per tick without a hitch
+  local PIECE = 4
+  local areas = {}
+  for _, r in ipairs(rects) do
+    for py = r.y0, r.y1, PIECE do
+      for px = r.x0, r.x1, PIECE do
+        local qx, qy = math.min(px + PIECE - 1, r.x1), math.min(py + PIECE - 1, r.y1)
+        areas[#areas + 1] = { { px * 32, py * 32 }, { (qx + 1) * 32, (qy + 1) * 32 } }
+      end
+    end
+  end
+  return areas
+end
+
+-- Squared distance from p to the nearest radar. Radars are pre-bucketed in cells
+-- of `cell` tiles; every target sits in some radar's (chunk-rounded) square, so
+-- the nearest radar is at most cell*sqrt(2) away and two cells of reach find it.
+local function nearest_radar_d2(radar_grid, cell, p)
+  local gx, gy = math.floor(p.x / cell), math.floor(p.y / cell)
+  local best = math.huge
+  for ix = gx - 2, gx + 2 do
+    local col = radar_grid[ix]
+    if col then
+      for iy = gy - 2, gy + 2 do
+        local bucket = col[iy]
+        if bucket then
+          for _, rp in ipairs(bucket) do
+            local dx, dy = p.x - rp.x, p.y - rp.y
+            local d = dx * dx + dy * dy
+            if d < best then best = d end
+          end
+        end
+      end
+    end
+  end
+  return best
+end
+
+-- Auto-fire is a sweep spread over the whole interval instead of one burst:
+--   scan    — a few radar-coverage pieces searched per tick, done by SCAN_SHARE
+--             of the interval;
+--   cluster — a batch of nests grouped per tick, done by CLUSTER_SHARE;
+--   fire    — nearest-first sort and launch, one cheap step per ring.
+-- The per-tick budget is whatever is left divided by the ticks left, so a small
+-- sweep finishes in a few ticks and a huge one is smeared evenly. All state
+-- lives in storage (multiplayer- and save-safe). Rods fire when a ring's sweep
+-- finishes, at most CLUSTER_SHARE of the interval after it started.
+local SCAN_SHARE, CLUSTER_SHARE = 0.5, 0.9
+local MIN_SEEDS_PER_TICK = 50
+
+-- live radars of `force` on `surface`, pruning dead registry entries
+local function registered_radars(surface, force)
+  local by_id = storage.radars and storage.radars[surface.index]
+  local out = {}
+  if not by_id then return out end
+  for id, r in pairs(by_id) do
+    if not r.valid then
+      by_id[id] = nil
+    elseif r.force == force then
+      out[#out + 1] = r
+    end
+  end
+  return out
+end
+
+local function register_radar(event)
+  local e = event.entity or event.destination
+  if not (e and e.valid and e.type == "radar" and e.unit_number) then return end
+  storage.radars = storage.radars or {}
+  local by_id = storage.radars[e.surface.index]
+  if not by_id then by_id = {}; storage.radars[e.surface.index] = by_id end
+  by_id[e.unit_number] = e
+end
+
+local RADAR_FILTER = { { filter = "type", type = "radar" } }
+for _, ev in ipairs({ "on_built_entity", "on_robot_built_entity", "script_raised_built",
+                      "script_raised_revive", "on_entity_cloned" }) do
+  if defines.events[ev] then
+    script.on_event(defines.events[ev], register_radar, RADAR_FILTER)
+  end
+end
+
+-- Queue one ring's sweep job (nothing is searched yet)
+local function auto_fire_job(c, force, surface, ring)
+  local radars = registered_radars(surface, force)
+  if #radars == 0 then return nil end
+  local enemies = {}
+  for _, f in pairs(game.forces) do
+    if f ~= force and force.is_enemy(f) then enemies[#enemies + 1] = f end
+  end
+  if #enemies == 0 then return nil end
+  local radar_pos = {}
+  for i, r in ipairs(radars) do radar_pos[i] = { x = r.position.x, y = r.position.y } end
+  return {
+    force = force, surface = surface, ring = ring, enemies = enemies,
+    radar_pos = radar_pos,
+    pieces = radar_coverage(radars, c.auto_range), next_piece = 1,
+    targets = {}
+  }
+end
+
 -- Automatic bombardment: every force's rings hit the nearest enemy nests (and,
 -- optionally, worms) sitting inside radar coverage, clustered by blast radius so
 -- rods are not wasted, nearest threats first, capped by charged rods. Assigned to
--- the forward-declared `auto_fire` so on_nth_tick (defined earlier) can call it.
+-- the forward-declared `auto_fire` so on_nth_tick (defined earlier) can call it;
+-- it only STARTS a sweep, auto_fire_step does the work tick by tick.
+-- Only rings that can actually fire are swept: an empty, paused or unbuilt ring
+-- costs nothing, and forces without rings (enemy, neutral, modded) are skipped.
 auto_fire = function(c, tick)
-  local types = c.auto_worms and { "unit-spawner", "turret" } or { "unit-spawner" }
-  local rr = c.auto_range
-  for _, force in pairs(game.forces) do
-    for _, surface in pairs(game.surfaces) do
-      if surface.valid and surface.planet then
-        local ok_r, radars = pcall(function()
-          return surface.find_entities_filtered{ type = "radar", force = force }
-        end)
-        if ok_r and radars and #radars > 0 then
-          local ring = get_ring(force.name, surface.planet.name)
-          finish_charging(ring, tick)
-          local free = not c.require_rods
-          if free or (ring.enabled and ring.stations > 0 and ring.charged > 0) then
-            local power = free and 1 or ring_power(ring, c)
-            local radius = math.max(5, c.radius * power ^ (1 / 3))
-
-            -- gather enemy targets within radar range (deduped across radars)
-            local targets, seen = {}, {}
-            for _, radar in pairs(radars) do
-              if radar.valid then
-                local rp = radar.position
-                local ok_e, ents = pcall(function()
-                  return surface.find_entities_filtered{
-                    area = { { rp.x - rr, rp.y - rr }, { rp.x + rr, rp.y + rr } },
-                    type = types
-                  }
-                end)
-                if ok_e and ents then
-                  for _, e in pairs(ents) do
-                    if e.valid and e.force ~= force and not force.get_friend(e.force) then
-                      local key = e.unit_number
-                      if not key or not seen[key] then
-                        if key then seen[key] = true end
-                        targets[#targets + 1] = e.position
-                      end
-                    end
-                  end
-                end
-              end
-            end
-
-            if #targets > 0 then
-              local pts = cluster_strikes(targets, radius)
-              -- nearest-threat first: sort clusters by distance to closest radar
-              for _, p in ipairs(pts) do
-                local best = math.huge
-                for _, radar in pairs(radars) do
-                  if radar.valid then
-                    local dx, dy = p.x - radar.position.x, p.y - radar.position.y
-                    local d = dx * dx + dy * dy
-                    if d < best then best = d end
-                  end
-                end
-                p.d = best
-              end
-              table.sort(pts, function(a, b) return a.d < b.d end)
-
-              local avail = free and math.huge or ring.charged
-              local fired = 0
-              for _, p in ipairs(pts) do
-                if fired >= avail then break end
-                schedule_strike(surface, force, p, radius, power, c, tick)
-                fired = fired + 1
-              end
-              if not free then ring.charged = ring.charged - fired end
-              if fired > 0 then
-                pcall(function()
-                  force.print({ "tungsten-rain.auto", fired, surface.planet.name })
-                end)
-              end
+  local jobs = {}
+  if c.require_rods then
+    for force_name, by_planet in pairs(storage.rings) do
+      local force = game.forces[force_name]
+      if force and force.valid then
+        for planet_name, ring in pairs(by_planet) do
+          if ring.enabled and (ring.stations or 0) > 0 then
+            finish_charging(ring, tick)
+            local planet = game.planets[planet_name]
+            local surface = planet and planet.surface
+            if (ring.charged or 0) > 0 and surface and surface.valid then
+              jobs[#jobs + 1] = auto_fire_job(c, force, surface, ring)
             end
           end
         end
       end
     end
+  else
+    -- free strikes (testing): no rings needed, any force with players fires
+    for _, force in pairs(game.forces) do
+      if #force.players > 0 then
+        for _, surface in pairs(game.surfaces) do
+          if surface.valid and surface.planet then
+            jobs[#jobs + 1] = auto_fire_job(c, force, surface, nil)
+          end
+        end
+      end
+    end
+  end
+  if #jobs == 0 then return end
+  storage.auto_sweep = {
+    c = c, jobs = jobs, phase = "scan", job_i = 1,
+    scan_end = tick + math.max(1, math.floor(c.auto_interval * SCAN_SHARE)),
+    cluster_end = tick + math.max(2, math.floor(c.auto_interval * CLUSTER_SHARE))
+  }
+end
+
+local function remaining_share(total_left, deadline, tick, min_per_tick)
+  local ticks_left = math.max(1, deadline - tick)
+  return math.max(min_per_tick, math.ceil(total_left / ticks_left))
+end
+
+-- Launch one finished job's clusters, nearest radar first
+local function auto_fire_launch(sw, job, tick)
+  local c, force, surface, ring = sw.c, job.force, job.surface, job.ring
+  if not (surface.valid and force.valid) then return end
+  local free = not c.require_rods
+  if not free then
+    -- the ring may have been paused or spent by hand while we were sweeping
+    finish_charging(ring, tick)
+    if not ring.enabled or (ring.charged or 0) < 1 then return end
+  end
+  local pts = cluster_finish(job.cl)
+  if #pts == 0 then return end
+
+  local cell = c.auto_range + 32
+  local radar_grid = {}
+  for _, rp in ipairs(job.radar_pos) do
+    local gx, gy = math.floor(rp.x / cell), math.floor(rp.y / cell)
+    local col = radar_grid[gx]
+    if not col then col = {}; radar_grid[gx] = col end
+    local bucket = col[gy]
+    if not bucket then bucket = {}; col[gy] = bucket end
+    bucket[#bucket + 1] = rp
+  end
+  for _, p in ipairs(pts) do p.d = nearest_radar_d2(radar_grid, cell, p) end
+  table.sort(pts, function(a, b) return a.d < b.d end)
+
+  local power = free and 1 or ring_power(ring, c)
+  local radius = job.radius
+  local avail = free and math.huge or ring.charged
+  local fired = 0
+  for _, p in ipairs(pts) do
+    if fired >= avail then break end
+    schedule_strike(surface, force, { x = p.x, y = p.y }, radius, power, c, tick)
+    fired = fired + 1
+  end
+  if not free then ring.charged = ring.charged - fired end
+  if fired > 0 then
+    pcall(function()
+      force.print({ "tungsten-rain.auto", fired, surface.planet.name })
+    end)
+  end
+end
+
+-- One tick of the sweep in progress. Called from on_tick; a no-op when idle.
+local function auto_fire_step(tick)
+  local sw = storage.auto_sweep
+  if not sw then return end
+  if not settings.global["tungsten-rain-auto-fire"].value then
+    storage.auto_sweep = nil
+    return
+  end
+  local jobs = sw.jobs
+
+  if sw.phase == "scan" then
+    local left = 0
+    for i = sw.job_i, #jobs do left = left + (#jobs[i].pieces - jobs[i].next_piece + 1) end
+    local budget = remaining_share(left, sw.scan_end, tick, 1)
+    while budget > 0 and sw.job_i <= #jobs do
+      local job = jobs[sw.job_i]
+      if job.next_piece > #job.pieces or not job.surface.valid then
+        sw.job_i = sw.job_i + 1
+      else
+        local area = job.pieces[job.next_piece]
+        job.next_piece = job.next_piece + 1
+        budget = budget - 1
+        local types = sw.c.auto_worms and { "unit-spawner", "turret" } or { "unit-spawner" }
+        local ok_e, ents = pcall(function()
+          return job.surface.find_entities_filtered{ area = area, type = types, force = job.enemies }
+        end)
+        if ok_e and ents then
+          local targets = job.targets
+          for _, e in pairs(ents) do
+            if e.valid then targets[#targets + 1] = e.position end
+          end
+        end
+      end
+    end
+    if sw.job_i > #jobs then
+      -- scan done: set up clustering for every job at the power its ring has now
+      for _, job in ipairs(jobs) do
+        local power = (not sw.c.require_rods) and 1 or ring_power(job.ring, sw.c)
+        job.radius = math.max(5, sw.c.radius * power ^ (1 / 3))
+        job.cl = cluster_new(job.targets, job.radius)
+        job.targets = nil
+      end
+      sw.phase, sw.job_i = "cluster", 1
+    end
+    return
+  end
+
+  if sw.phase == "cluster" then
+    local left = 0
+    for i = sw.job_i, #jobs do left = left + (#jobs[i].cl.targets - jobs[i].cl.next_seed + 1) end
+    local budget = remaining_share(left, sw.cluster_end, tick, MIN_SEEDS_PER_TICK)
+    while budget > 0 and sw.job_i <= #jobs do
+      local job = jobs[sw.job_i]
+      local before = job.cl.next_seed
+      if cluster_run(job.cl, budget) then
+        auto_fire_launch(sw, job, tick)
+        job.cl = nil
+        sw.job_i = sw.job_i + 1
+      end
+      budget = budget - (job.cl and (job.cl.next_seed - before) or 1)
+    end
+    if sw.job_i > #jobs then storage.auto_sweep = nil end
   end
 end
 
@@ -1051,6 +1354,11 @@ script.on_event(defines.events.on_player_alt_selected_area, on_alt_selected)
 -- Scheduler
 -- ---------------------------------------------------------------------------
 script.on_event(defines.events.on_tick, function(event)
+  if storage.auto_sweep then
+    local ok = pcall(auto_fire_step, event.tick)
+    if not ok then storage.auto_sweep = nil end -- never wedge on a bad sweep
+  end
+
   local strikes = storage.strikes
   if strikes and #strikes > 0 then
     for i = #strikes, 1, -1 do

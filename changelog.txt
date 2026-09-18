@@ -1,4 +1,25 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.3.2
+Date: 2026-09-18
+  Optimizations:
+    - Auto-fire (orbital patrol) no longer stutters the game every sweep. It used to do the whole
+      sweep in one tick: scan every force on every planet (enemy and neutral included) for
+      radars, then search a 900x900 tile square around each radar separately — a base with
+      dozens of overlapping radars was searched dozens of times over, every 10 seconds.
+    - The sweep is now spread over the interval: radar coverage is searched a small piece
+      (4x4 chunks) per tick, then nests are clustered a batch per tick, and the ring fires when
+      its sweep completes: a small, even load instead of a one-tick spike. Rods may leave a few
+      seconds later than before.
+    - Radars are tracked from build events instead of being searched for across the whole
+      planet every sweep (one full scan when the save is first loaded with this version).
+    - Only rings that are enabled, built and charged are swept at all. Overlapping radar
+      coverage is merged so every tile is searched once, and the search is filtered to enemy
+      forces inside the engine.
+    - Nest clustering (auto-fire and carpet bombardment) uses a spatial grid instead of comparing
+      every nest with every other: 2000 nests went from ~80 ms to ~4 ms. Same strikes as before.
+  Changes:
+    - Auto-fire interval can no longer be set below 10 seconds (was 1 s).
+---------------------------------------------------------------------------------------------------
 Version: 0.3.1
 Date: 2026-09-18
   Changes:

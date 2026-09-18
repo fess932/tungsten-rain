@@ -132,7 +132,12 @@ defines = {
     on_player_alt_selected_area = "on_player_alt_selected_area",
     on_tick = "on_tick",
     on_lua_shortcut = "on_lua_shortcut",
-    on_gui_click = "on_gui_click"
+    on_gui_click = "on_gui_click",
+    on_built_entity = "on_built_entity",
+    on_robot_built_entity = "on_robot_built_entity",
+    script_raised_built = "script_raised_built",
+    script_raised_revive = "script_raised_revive",
+    on_entity_cloned = "on_entity_cloned"
   },
   inventory = { hub_main = 1, cargo_landing_pad_main = 2 }
 }
@@ -142,9 +147,11 @@ rendering = { draw_circle = function() end }
 -- settings mock: defaults must match settings.lua
 local setting_defaults = {}
 for _, p in ipairs(settings_protos) do setting_defaults[p.name] = p.default_value end
+local setting_overrides = {}
 settings = {
   global = setmetatable({}, { __index = function(_, k)
     assert(setting_defaults[k] ~= nil, "control.lua reads undefined setting: " .. tostring(k))
+    if setting_overrides[k] ~= nil then return { value = setting_overrides[k] } end
     return { value = setting_defaults[k] }
   end })
 }
@@ -162,7 +169,7 @@ local platform = {
 }
 local force = { name = "player", platforms = { platform }, print = function() end }
 local fake_player = { print = function() end, force = force, gui = { screen = {} } }
-game = { tick = 0, forces = { player = force }, connected_players = {},
+game = { tick = 0, forces = { player = force }, connected_players = {}, surfaces = {},
          get_player = function() return fake_player end }
 
 dofile("control.lua")
@@ -299,6 +306,149 @@ handlers.events["on_gui_click"]({
 })
 st = iface.ring_status("player", "vulcanus")
 check(st.enabled == true, "GUI resume button toggles it back")
+
+-- auto-fire: a sweep spread over the interval. Radars come from the build-event
+-- registry, coverage is searched once in small pieces a tick at a time, only
+-- enemy forces are hit, nests are clustered by blast radius, nearest fires first.
+print("auto-fire:")
+setting_overrides["tungsten-rain-auto-fire"] = true
+check(handlers.events["on_built_entity"] and handlers.events["on_robot_built_entity"]
+  and handlers.events["script_raised_built"] and handlers.events["on_entity_cloned"],
+  "radar registry listens to build / robot / script / clone events")
+local enemy = { name = "enemy", valid = true }
+force.valid = true
+force.players = {}
+force.is_enemy = function(f) return f == enemy end
+game.forces.enemy = enemy
+vulcanus_surface.index = 3
+local function radar(id, x, y)
+  return { valid = true, type = "radar", unit_number = id, surface = vulcanus_surface,
+           force = force, position = { x = x, y = y } }
+end
+handlers.events["on_built_entity"]({ entity = radar(1, 0, 0) })
+handlers.events["on_robot_built_entity"]({ entity = radar(2, 10, 0) })
+handlers.events["script_raised_built"]({ entity = radar(3, 5, 5) })
+local dead = radar(4, 9000, 9000)
+handlers.events["on_built_entity"]({ entity = dead })
+dead.valid = false -- destroyed since: must be pruned, not searched around
+
+local nests = { { x = 100, y = 100 }, { x = 110, y = 100 }, { x = 300, y = -200 },
+                { x = 5000, y = 5000 } } -- the last one is far outside radar range
+local area_calls, area_tiles, seen_force, calls_this_tick, max_per_tick = 0, 0, nil, 0, 0
+local found_order = {}
+vulcanus_surface.find_entities_filtered = function(f)
+  assert(f.type ~= "radar", "auto-fire must not search the planet for radars")
+  area_calls = area_calls + 1
+  calls_this_tick = calls_this_tick + 1
+  area_tiles = area_tiles + (f.area[2][1] - f.area[1][1]) * (f.area[2][2] - f.area[1][2])
+  seen_force = f.force
+  local out = {}
+  for _, n in ipairs(nests) do
+    if n.x >= f.area[1][1] and n.x < f.area[2][1] and n.y >= f.area[1][2] and n.y < f.area[2][2] then
+      out[#out + 1] = { valid = true, position = n }
+      found_order[#found_order + 1] = n
+    end
+  end
+  return out
+end
+game.planets = { vulcanus = { surface = vulcanus_surface } }
+game.surfaces = { vulcanus_surface }
+local on_tick = handlers.events["on_tick"]
+-- start a sweep at t0 and tick it until it completes; returns ticks taken
+local function run_sweep(t0)
+  storage.next_auto = 0
+  nth({ tick = t0 })
+  local t = t0
+  while storage.auto_sweep and t < t0 + 10000 do
+    calls_this_tick = 0
+    on_tick({ tick = t })
+    if calls_this_tick > max_per_tick then max_per_tick = calls_this_tick end
+    t = t + 1
+  end
+  return t - t0
+end
+
+-- settle any pending spin-up first so only auto-fire changes the charge
+storage.next_auto = math.huge
+nth({ tick = 99000 })
+storage.strikes = {}
+local before = iface.ring_status("player", "vulcanus").charged
+local took = run_sweep(100000)
+-- three overlapping radars (range 448) cover chunks -14..14 on both axes: one
+-- 29x29-chunk rectangle, searched once, in 4x4-chunk pieces
+check(area_tiles == 29 * 29 * 32 * 32,
+  "overlapping radar coverage is searched exactly once (" .. area_tiles .. " tiles)")
+check(area_calls == 64, "coverage cut into 64 pieces of <= 4x4 chunks (got " .. area_calls .. ")")
+check(max_per_tick <= 1, "at most one piece searched per tick (got " .. max_per_tick .. ")")
+check(took <= 600, "sweep finishes within the 10 s interval (" .. took .. " ticks)")
+check(type(seen_force) == "table" and seen_force[1] == enemy and #seen_force == 1,
+  "nest search is filtered to enemy forces engine-side")
+check(#storage.strikes == 2, "two clusters in range -> two rods, out-of-range nest ignored (got "
+  .. #storage.strikes .. ")")
+local first = storage.strikes[1] and storage.strikes[1].pos
+check(first and math.abs(first.x - 105) < 1e-9 and math.abs(first.y - 100) < 1e-9,
+  "nearest cluster fires first, at the centroid of its two nests")
+check(iface.ring_status("player", "vulcanus").charged == before - 2, "auto-fire spends charged rods")
+check(storage.radars[3][4] == nil, "destroyed radar pruned from the registry")
+
+-- a paused ring is not swept at all
+area_calls = 0
+handlers.events["on_gui_click"]({ player_index = 1,
+  element = { valid = true, name = "tungsten-rain-toggle/vulcanus" } })
+run_sweep(200000)
+check(area_calls == 0 and storage.auto_sweep == nil, "paused ring costs no search")
+handlers.events["on_gui_click"]({ player_index = 1,
+  element = { valid = true, name = "tungsten-rain-toggle/vulcanus" } })
+
+-- turning auto-fire off mid-sweep abandons it
+storage.next_auto = 0
+nth({ tick = 250000 })
+check(storage.auto_sweep ~= nil, "sweep in progress")
+setting_overrides["tungsten-rain-auto-fire"] = false
+on_tick({ tick = 250001 })
+check(storage.auto_sweep == nil, "disabling auto-fire drops the sweep in progress")
+setting_overrides["tungsten-rain-auto-fire"] = true
+
+-- clustering spread over ticks gives the same strikes as the all-pairs greedy
+local function reference_clusters(targets, radius)
+  local alive, r2, pts = {}, radius * radius, {}
+  for i = 1, #targets do alive[i] = true end
+  for si, seed in ipairs(targets) do
+    if alive[si] then
+      local cx, cy, n = 0, 0, 0
+      for i, t in ipairs(targets) do
+        local dx, dy = t.x - seed.x, t.y - seed.y
+        if alive[i] and dx * dx + dy * dy <= r2 then cx = cx + t.x; cy = cy + t.y; n = n + 1 end
+      end
+      local sx, sy = cx / n, cy / n
+      for i, t in ipairs(targets) do
+        local dx, dy = t.x - sx, t.y - sy
+        if alive[i] and dx * dx + dy * dy <= r2 then alive[i] = false end
+      end
+      alive[si] = false
+      pts[#pts + 1] = { x = sx, y = sy }
+    end
+  end
+  return pts
+end
+math.randomseed(42)
+nests = {}
+for i = 1, 2000 do nests[i] = { x = math.random(-440, 440) + 0.5, y = math.random(-440, 440) + 0.5 } end
+iface.charge_ring("player", "vulcanus", 100000)
+storage.strikes = {}
+found_order = {}
+max_per_tick = 0
+took = run_sweep(300000)
+local want = reference_clusters(found_order, 67)
+local function key(p) return string.format("%.6f:%.6f", p.x, p.y) end
+local got_set = {}
+for _, st in ipairs(storage.strikes) do got_set[key(st.pos)] = true end
+local same = #storage.strikes == #want and #found_order == 2000
+for _, p in ipairs(want) do if not got_set[key(p)] then same = false end end
+check(same, "sliced clustering matches the all-pairs reference on 2000 random nests ("
+  .. #storage.strikes .. " vs " .. #want .. " strikes)")
+check(took <= 600, "2000-nest sweep still finishes within the interval (" .. took .. " ticks)")
+setting_overrides["tungsten-rain-auto-fire"] = nil
 
 -- locale key sanity: every key referenced in control.lua exists in both locales
 print("locale:")
